@@ -1,0 +1,177 @@
+From a1bf2e1c696b703935f4b81ca087a60cc2559464 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 27 Jul 2020 21:45:25 +0800
+Subject: [PATCH 08/50] kata-runtime: fix kata-runtime resource left problem
+
+reason: fix the following resource left problem
+- sandbox stored files and directory are deleted before work container delete
+- ignore StatusSandbox error, let stopSandbox function call be executed
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/delete.go         | 25 +++++++++++++++++++++++--
+ cli/delete_test.go    | 15 +++++++++++++++
+ cli/state.go          |  6 ++++++
+ virtcontainers/api.go |  4 +++-
+ 4 files changed, 47 insertions(+), 3 deletions(-)
+
+diff --git a/cli/delete.go b/cli/delete.go
+index 2f5586e5..871ac40d 100644
+--- a/cli/delete.go
++++ b/cli/delete.go
+@@ -10,6 +10,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"os"
++	"strings"
+ 
+ 	"github.com/kata-containers/runtime/pkg/katautils"
+ 	vc "github.com/kata-containers/runtime/virtcontainers"
+@@ -68,6 +69,12 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 	setExternalLoggers(ctx, kataLog)
+ 	span.SetTag("container", containerID)
+ 
++	// Remove the containerID to sandboxID mapping
++	// no matter what error return
++	defer func() {
++		_ = katautils.DelContainerIDMapping(ctx, containerID)
++	}()
++
+ 	// Checks the MUST and MUST NOT from OCI runtime specification
+ 	status, sandboxID, err := getExistingContainerInfo(ctx, containerID)
+ 	if err != nil {
+@@ -75,6 +82,15 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 			kataLog.Warnf("Failed to get container, force will not fail: %s", err)
+ 			return nil
+ 		}
++
++		// If err info containers "no such file or directory, because pod_sandbox type
++		// container is deleted before pod_container type container, just return nil
++		// and let containerd delete container operations continue
++		if strings.Contains(err.Error(), "no such file or directory") {
++			kataLog.Warnf("pod_sandbox deleted before pod_container: %v", err)
++			return nil
++		}
++
+ 		return err
+ 	}
+ 
+@@ -123,7 +139,12 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 		}
+ 	case vc.PodContainer:
+ 		if err := deleteContainer(ctx, sandboxID, containerID, forceStop); err != nil {
+-			return err
++			// If err info containers "no such file or directory, because pod_sandbox type
++			// container is deleted before pod_container type container, just return nil
++			// and let containerd delete container operations continue
++			if !strings.Contains(err.Error(), "no such file or directory") {
++				return err
++			}
+ 		}
+ 	default:
+ 		return fmt.Errorf("Invalid container type found")
+@@ -134,7 +155,7 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 		return err
+ 	}
+ 
+-	return katautils.DelContainerIDMapping(ctx, containerID)
++	return nil
+ }
+ 
+ func deleteSandbox(ctx context.Context, sandboxID string, force bool) error {
+diff --git a/cli/delete_test.go b/cli/delete_test.go
+index a2455dee..ae421cd7 100644
+--- a/cli/delete_test.go
++++ b/cli/delete_test.go
+@@ -184,6 +184,9 @@ func TestDeleteSandbox(t *testing.T) {
+ 	assert.Error(err)
+ 	assert.True(vcmock.IsMockError(err))
+ 
++	path, err = createTempContainerIDMapping(sandbox.ID(), sandbox.ID())
++	assert.NoError(err)
++
+ 	testingImpl.StatusSandboxFunc = func(ctx context.Context, sandboxID string) (vc.SandboxStatus, error) {
+ 		return vc.SandboxStatus{
+ 			ID: sandbox.ID(),
+@@ -201,6 +204,9 @@ func TestDeleteSandbox(t *testing.T) {
+ 	assert.Error(err)
+ 	assert.True(vcmock.IsMockError(err))
+ 
++	path, err = createTempContainerIDMapping(sandbox.ID(), sandbox.ID())
++	assert.NoError(err)
++
+ 	testingImpl.StopSandboxFunc = func(ctx context.Context, sandboxID string, force bool) (vc.VCSandbox, error) {
+ 		return sandbox, nil
+ 	}
+@@ -213,6 +219,9 @@ func TestDeleteSandbox(t *testing.T) {
+ 	assert.Error(err)
+ 	assert.True(vcmock.IsMockError(err))
+ 
++	path, err = createTempContainerIDMapping(sandbox.ID(), sandbox.ID())
++	assert.NoError(err)
++
+ 	testingImpl.DeleteSandboxFunc = func(ctx context.Context, sandboxID string) (vc.VCSandbox, error) {
+ 		return sandbox, nil
+ 	}
+@@ -302,6 +311,9 @@ func TestDeleteSandboxRunning(t *testing.T) {
+ 	assert.Error(err)
+ 	assert.False(vcmock.IsMockError(err))
+ 
++	path, err = createTempContainerIDMapping(sandbox.ID(), sandbox.ID())
++	assert.NoError(err)
++
+ 	testingImpl.StatusSandboxFunc = func(ctx context.Context, sandboxID string) (vc.SandboxStatus, error) {
+ 		return vc.SandboxStatus{
+ 			ID: sandbox.ID(),
+@@ -325,6 +337,9 @@ func TestDeleteSandboxRunning(t *testing.T) {
+ 	assert.Error(err)
+ 	assert.True(vcmock.IsMockError(err))
+ 
++	path, err = createTempContainerIDMapping(sandbox.ID(), sandbox.ID())
++	assert.NoError(err)
++
+ 	testingImpl.DeleteSandboxFunc = func(ctx context.Context, sandboxID string) (vc.VCSandbox, error) {
+ 		return sandbox, nil
+ 	}
+diff --git a/cli/state.go b/cli/state.go
+index a2fcc12e..de843d34 100644
+--- a/cli/state.go
++++ b/cli/state.go
+@@ -11,6 +11,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"os"
++	"strings"
+ 
+ 	"github.com/kata-containers/runtime/pkg/katautils"
+ 	"github.com/kata-containers/runtime/virtcontainers/pkg/oci"
+@@ -52,6 +53,11 @@ func state(ctx context.Context, containerID string) error {
+ 	// Checks the MUST and MUST NOT from OCI runtime specification
+ 	status, _, err := getExistingContainerInfo(ctx, containerID)
+ 	if err != nil {
++		// If err info containers "no such file or directory, because pod_sandbox type
++		// container is deleted before pod_container type container, just return nil
++		if strings.Contains(err.Error(), "no such file or directory") {
++			return nil
++		}
+ 		return err
+ 	}
+ 
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index fa82d163..449a03e0 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -374,7 +374,9 @@ func StatusSandbox(ctx context.Context, sandboxID string) (SandboxStatus, error)
+ 	for _, container := range s.containers {
+ 		contStatus, err := statusContainer(s, container.id)
+ 		if err != nil {
+-			return SandboxStatus{}, err
++			// Since statusContainer may get error because of qemu process D or T,
++			// So just ignore this error and let StatusSandbox function return actually SandboxStatus
++			s.Logger().Warnf("Status container's status in sandbox get error: %v", contStatus)
+ 		}
+ 
+ 		contStatusList = append(contStatusList, contStatus)
+-- 
+2.14.3 (Apple Git-98)
+

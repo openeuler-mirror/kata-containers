@@ -1,0 +1,46 @@
+From 77711b531867be899df5d2c59a525ea1b7f0e6ac Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 17 Aug 2020 17:14:35 +0800
+Subject: [PATCH 32/50] network: add more detail usage for update-routes
+ subcommand
+
+reason: add more detail usage for update-routes subcommand
+to explain how to use update-routes subcommand
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/network.go | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/cli/network.go b/cli/network.go
+index 046d0ee9..3dd0971e 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -120,10 +120,20 @@ var listIfacesCommand = cli.Command{
+ }
+ 
+ var updateRoutesCommand = cli.Command{
+-	Name:      "update-routes",
+-	Usage:     "update routes of a container",
+-	ArgsUsage: `update-routes <container-id> file or - for stdin`,
+-	Flags:     []cli.Flag{},
++	Name:  "update-routes",
++	Usage: "update routes of a container",
++	ArgsUsage: `update-routes <container-id> file or - for stdin
++    file or stdin for example:
++    [
++	    {
++	    	"dest":"<[<ip>[/mask] | "default" ]>",
++	    	"gateway":"[ip]",
++	    	"device":"[tap-name]",
++	        "source": "[source]",
++	        "scope":[scope]
++	    }
++    ]`,
++	Flags: []cli.Flag{},
+ 	Action: func(context *cli.Context) error {
+ 		ctx, err := cliContextToContext(context)
+ 		if err != nil {
+-- 
+2.14.3 (Apple Git-98)
+

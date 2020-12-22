@@ -1,0 +1,115 @@
+From e104f084ed4f10049f45d9473faed229371a1c6c Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Wed, 19 Aug 2020 09:59:52 +0800
+Subject: [PATCH 45/50] network: support set dns
+
+reason: when running a sandbox with annotation about
+dns spec, overload k.getDNS(sandbox)
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/kata_agent.go                  | 11 +++++++++++
+ virtcontainers/network.go                     |  8 ++++----
+ virtcontainers/pkg/annotations/annotations.go |  3 +++
+ virtcontainers/pkg/oci/utils.go               | 19 +++++++++++++++++--
+ 4 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index fee4215f..d28d8cce 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -890,6 +890,17 @@ func (k *kataAgent) startSandbox(sandbox *Sandbox) error {
+ 		KernelModules: kmodules,
+ 	}
+ 
++	if value, ok := sandbox.config.Annotations[vcAnnotations.SandboxDNSTypeKey]; ok {
++		var sandboxDns *DNSInfo
++		if err := json.Unmarshal([]byte(value), &sandboxDns); err != nil {
++			return fmt.Errorf("get sandbox dns failed %v", err)
++		}
++
++		if sandboxDns != nil {
++			req.Dns = sandboxDns.Servers
++		}
++	}
++
+ 	_, err = k.sendReq(req)
+ 	if err != nil {
+ 		return err
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index 488bd00c..68eda4a6 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -117,10 +117,10 @@ const (
+ 
+ // DNSInfo describes the DNS setup related to a network interface.
+ type DNSInfo struct {
+-	Servers  []string
+-	Domain   string
+-	Searches []string
+-	Options  []string
++	Servers  []string `json:"Servers"`
++	Domain   string   `json:"Domain,omitempty"`
++	Searches []string `json:"Searches,omitempty"`
++	Options  []string `json:"Options,omitempty"`
+ }
+ 
+ // NetlinkIface describes fully a network interface.
+diff --git a/virtcontainers/pkg/annotations/annotations.go b/virtcontainers/pkg/annotations/annotations.go
+index e50a697c..528dfa66 100644
+--- a/virtcontainers/pkg/annotations/annotations.go
++++ b/virtcontainers/pkg/annotations/annotations.go
+@@ -71,6 +71,9 @@ const (
+ 	// StorageSpecTypeKey is the annotation key to fetch storage_spec
+ 	StorageSpecTypeKey = kataAnnotationsPrefix + "storage_spec"
+ 
++	// SandboxDNSTypeKey is the annotation key to fetch sandbox dns options
++	SandboxDNSTypeKey = kataAnnotationsPrefix + "sandbox_dns"
++
+ 	//
+ 	//	Generic annotations
+ 	//
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index d032227e..3b2af753 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -7,6 +7,7 @@ package oci
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"path/filepath"
+@@ -37,8 +38,9 @@ type annotationContainerType struct {
+ type annotationHandler func(value string) error
+ 
+ var annotationHandlerList = map[string]annotationHandler{
+-	vcAnnotations.StaticCPUTypeKey: validateSandboxCPU,
+-	vcAnnotations.StaticMemTypeKey: validateSandboxMem,
++	vcAnnotations.StaticCPUTypeKey:  validateSandboxCPU,
++	vcAnnotations.StaticMemTypeKey:  validateSandboxMem,
++	vcAnnotations.SandboxDNSTypeKey: validateSandboxDNS,
+ }
+ 
+ var (
+@@ -1108,3 +1110,16 @@ func validateSandboxMem(value string) error {
+ 
+ 	return nil
+ }
++
++func validateSandboxDNS(value string) error {
++	if value == "" {
++		return fmt.Errorf("--annotation %s value should not be empty", vcAnnotations.SandboxDNSTypeKey)
++	}
++
++	var sandboxDns *vc.DNSInfo
++	if err := json.Unmarshal([]byte(value), &sandboxDns); err != nil {
++		return fmt.Errorf("invalid value passed by --annotation %s, error: %v", vcAnnotations.SandboxDNSTypeKey, err)
++	}
++
++	return nil
++}
+-- 
+2.14.3 (Apple Git-98)
+

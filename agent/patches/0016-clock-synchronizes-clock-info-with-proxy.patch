@@ -1,0 +1,268 @@
+From 6120525f81701424e97d453d515d38f14bbe99d9 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Wed, 19 Aug 2020 20:25:00 +0800
+Subject: [PATCH 16/16] clock: synchronizes clock info with proxy
+
+reason: virtual machine's clock may be incorrect, proxy synchronizes
+clock info to help virtual machine adjust clock time
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ pkg/clock/clock_util.go   | 47 ++++++++++++++++++++++++
+ sync_clock_server.go      | 94 +++++++++++++++++++++++++++++++++++++++++++++++
+ sync_clock_server_test.go | 88 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 229 insertions(+)
+ create mode 100644 pkg/clock/clock_util.go
+ create mode 100644 sync_clock_server.go
+ create mode 100644 sync_clock_server_test.go
+
+diff --git a/pkg/clock/clock_util.go b/pkg/clock/clock_util.go
+new file mode 100644
+index 0000000..4b78c63
+--- /dev/null
++++ b/pkg/clock/clock_util.go
+@@ -0,0 +1,47 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2018. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++// Description: sync clock related function
++// Author: xueshaojia
++// Create: 2018-11-10
++
++// Package clock provides clock sync functions
++package clock
++
++import (
++	"net"
++	"syscall"
++)
++
++type TimeValue struct {
++	ClientSendTime   int64 `json:"client_send_time"`
++	ClientArriveTime int64 `json:"client_arrive_time"`
++	ServerSendTime   int64 `json:"server_send_time"`
++	ServerArriveTime int64 `json:"server_arrive_time"`
++	Delta            int64 `json:"delta"`
++}
++
++const MaxSyncClockByteNum = 400                 // sync clock byte num, max=400
++const MaxTimeStampSupport = 3155731199000000000 // unit is ns, 2069/12/31 23:59:59
++const MinTimeStampSupport = 0                   // unit is ns, 1970/1/1 8:0:0
++
++// getCurrentTimeNs returns UTC time in Ns
++func GetCurrentTimeNs() int64 {
++	var tv syscall.Timeval
++	if err := syscall.Gettimeofday(&tv); err != nil {
++		return -1
++	}
++	return tv.Sec*1000000000 + tv.Usec*1000
++}
++
++// readConnData reads data from stream
++func ReadConnData(stream net.Conn) (buf []byte, byteNum int, err error) {
++	buf = make([]byte, MaxSyncClockByteNum)
++	byteNum, err = stream.Read(buf)
++	return buf, byteNum, err
++}
++
++// writeConnData writes data to stream
++func WriteConnData(stream net.Conn, buf []byte) error {
++	_, err := stream.Write(buf)
++	return err
++}
+diff --git a/sync_clock_server.go b/sync_clock_server.go
+new file mode 100644
+index 0000000..a8e98c6
+--- /dev/null
++++ b/sync_clock_server.go
+@@ -0,0 +1,94 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2018. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++// Description: sync clock server related function
++// Author: xueshaojia
++// Create: 2018-11-10
++
++package main
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"net"
++	"os/exec"
++	"syscall"
++
++	"github.com/kata-containers/agent/pkg/clock"
++)
++
++// getSyncClockInfo waits for client request
++func getSyncClockInfo(stream net.Conn, clockInfo *clock.TimeValue) error {
++	buf, byteNum, err := clock.ReadConnData(stream)
++	if err != nil {
++		return err
++	}
++	return json.Unmarshal(buf[:byteNum], clockInfo)
++}
++
++// ackSyncClockInfo sends clock info to client
++func ackSyncClockInfo(stream net.Conn, clockInfo *clock.TimeValue) error {
++	b, err := json.Marshal(clockInfo)
++	if err != nil {
++		return err
++	}
++	return clock.WriteConnData(stream, b)
++}
++
++// setGuestClock sets systemtime and hwclock
++func setGuestClock(delta int64) error {
++	dstClockNs := clock.GetCurrentTimeNs() + delta
++	if dstClockNs < clock.MinTimeStampSupport || dstClockNs > clock.MaxTimeStampSupport {
++		return fmt.Errorf("sync clock failed, the valid timestamp is from 1970/1/1 8:0:0 to 2069/12/31 23:59:59")
++	}
++	dstTimeVal := syscall.NsecToTimeval(dstClockNs)
++	if err := syscall.Settimeofday(&dstTimeVal); err != nil {
++		agentLog.WithError(err).Error("sync clock, set systemtime failed")
++		return err
++	}
++	cmd := exec.Command("hwclock", "-w")
++	if err := cmd.Run(); err != nil {
++		agentLog.WithError(err).Error("sync clock, set hwclock failed")
++		return err
++	}
++	agentLog.Infof("sync clock, set systemtime and hwclock succ, delta:%d", delta)
++	return nil
++}
++
++// SyncClock is a loop that deals with client's request
++// 1 read client request
++// 2 response with clock info or set guest clock
++// 3 if error happends, print error info
++func SyncClock(stream net.Conn) {
++	for {
++		var clockInfo clock.TimeValue
++		if err := getSyncClockInfo(stream, &clockInfo); err != nil {
++			if err == io.EOF {
++				agentLog.WithError(err).Error("sync clock, yamux session error happends")
++				stream.Close()
++				break
++			}
++			agentLog.WithError(err).Error("sync clock, read sync clock info failed")
++			continue
++		}
++		// set client's request arrive time
++		clockInfo.ClientArriveTime = clock.GetCurrentTimeNs()
++		if clockInfo.Delta == 0 {
++			// this is a request for clock diff info
++			// set server's response send time
++			// if fails, wait for next time
++			clockInfo.ServerSendTime = clock.GetCurrentTimeNs()
++			if err := ackSyncClockInfo(stream, &clockInfo); err != nil {
++				agentLog.WithError(err).Error("sync clock, send back clock info failed")
++			}
++		} else {
++			// this is a request for adjusting guest clock
++			// 1 adjust guest clock(system time and hwclock)
++			// 2 do not send response any more
++			// 3 if fails, wait for next request to adjust
++			if err := setGuestClock(clockInfo.Delta); err != nil {
++				agentLog.WithError(err).Error("sync clock, set local clock failed")
++			}
++		}
++	}
++}
+diff --git a/sync_clock_server_test.go b/sync_clock_server_test.go
+new file mode 100644
+index 0000000..41d5227
+--- /dev/null
++++ b/sync_clock_server_test.go
+@@ -0,0 +1,88 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2018. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++// Description: sync clock server related test
++// Author: xueshaojia
++// Create: 2018-11-10
++
++package main
++
++import (
++	"encoding/json"
++	"fmt"
++	"math/rand"
++	"net"
++	"testing"
++
++	"github.com/hashicorp/yamux"
++	"github.com/kata-containers/agent/pkg/clock"
++)
++
++var clientStream net.Conn
++
++func TestGetCurrentTimeNs(t *testing.T) {
++	timeRet := clock.GetCurrentTimeNs()
++	if timeRet <= 0 {
++		t.Fatalf("TestGetCurrentTimeNs Fail, time:%d", timeRet)
++	}
++}
++
++func TestSetGuestClock(t *testing.T) {
++	if err := setGuestClock(0); err != nil {
++		t.Fatalf("test set clock failed, err:%v", err)
++	}
++}
++
++func TestReadWriteData(t *testing.T) {
++	sock := GenSocket()
++	var err error
++	listener, err := net.Listen("unix", sock)
++	if err != nil {
++		t.Fatalf("listening err: %v", err)
++	}
++	go SetUpClient(sock)
++	conn, err := listener.Accept()
++	if err != nil {
++		t.Fatalf("accept err: %v", err)
++	}
++	session, err := yamux.Server(conn, nil)
++	if err != nil {
++		t.Fatalf("session err: %v", err)
++	}
++	stream, err := session.Accept()
++	if err != nil {
++		t.Fatalf("stream err: %v", err)
++	}
++	go func() {
++		var clockInfo clock.TimeValue = clock.TimeValue{1000, 0, 0, 0, 0}
++		b, _ := json.Marshal(clockInfo)
++		clock.WriteConnData(clientStream, b)
++	}()
++	_, _, err = clock.ReadConnData(stream)
++	if err != nil {
++		t.Fatalf("read conn data error, err:%v", err)
++	}
++}
++
++func SetUpClient(sock string) error {
++	conn, err := net.Dial("unix", sock)
++	if err != nil {
++		return err
++	}
++	session, err := yamux.Client(conn, nil)
++	if err != nil {
++		conn.Close()
++		return err
++	}
++	stream, err := session.Open()
++	if err != nil {
++		return err
++	}
++	clientStream = stream
++	return nil
++}
++
++func GenSocket() string {
++	randSeed := clock.GetCurrentTimeNs()
++	rand.Seed(randSeed)
++	return fmt.Sprintf("/tmp/%d.sock", rand.Uint32())
++}
+-- 
+2.14.3 (Apple Git-98)
+

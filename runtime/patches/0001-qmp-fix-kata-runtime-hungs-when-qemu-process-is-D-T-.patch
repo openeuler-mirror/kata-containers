@@ -1,0 +1,44 @@
+From 73fe7242d18a10a86bc216ec5e33a10a8751f85f Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Fri, 24 Jul 2020 22:22:00 +0800
+Subject: [PATCH 01/50] qmp: fix kata-runtime hungs when qemu process is D/T
+ state
+
+reason: When set qemu's status to T and execute add-iface command
+the command will hung all the time.It hungs while wait for qemu
+to return version messages.
+
+When qmp starts, set the timeout time to 15 seconds.When times
+out, return qmp starts failed.We choose 15 seconds to keep consistent
+with the agent client start.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ vendor/github.com/intel/govmm/qemu/checklist | 1 +
+ vendor/github.com/intel/govmm/qemu/qmp.go    | 2 ++
+ 2 files changed, 3 insertions(+)
+ create mode 100644 vendor/github.com/intel/govmm/qemu/checklist
+
+diff --git a/vendor/github.com/intel/govmm/qemu/checklist b/vendor/github.com/intel/govmm/qemu/checklist
+new file mode 100644
+index 00000000..b32f1855
+--- /dev/null
++++ b/vendor/github.com/intel/govmm/qemu/checklist
+@@ -0,0 +1 @@
++add timeout when qmp start to avoid qmp client hungs all the time
+diff --git a/vendor/github.com/intel/govmm/qemu/qmp.go b/vendor/github.com/intel/govmm/qemu/qmp.go
+index bf9a77dd..a64039de 100644
+--- a/vendor/github.com/intel/govmm/qemu/qmp.go
++++ b/vendor/github.com/intel/govmm/qemu/qmp.go
+@@ -722,6 +722,8 @@ func QMPStart(ctx context.Context, socket string, cfg QMPConfig, disconnectedCh
+ 		if q.version == nil {
+ 			return nil, nil, fmt.Errorf("failed to find QMP version information")
+ 		}
++	case <-time.After(15 * time.Second):
++		return nil, nil, fmt.Errorf("qmp start time out")
+ 	}
+ 
+ 	return q, q.version, nil
+-- 
+2.14.3 (Apple Git-98)
+

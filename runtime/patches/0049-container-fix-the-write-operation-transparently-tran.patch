@@ -1,0 +1,58 @@
+From a6fab7014922d85b1105b44fdbb98239b22d3e00 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Wed, 19 Aug 2020 22:31:57 +0800
+Subject: [PATCH 49/50] container: fix the write operation transparently
+ transmitted to the host
+
+reason:fix the write operation transparently transmitted to the host
+when we fullfill the "/etc/hosts","/etc/resolv.conf","/etc/hostname" file in the container,
+for example:
+```bash
+$ docker exec -ti 63 bash
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/container.go | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 1b89f6ac..6edcb3f2 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -51,6 +51,12 @@ var cdromMajors = map[int64]string{
+ 	32: "CM206_CDROM_MAJOR",
+ }
+ 
++var safeCopyFiles = map[string]struct{}{
++	"resolv.conf": {},
++	"hostname":    {},
++	"hosts":       {},
++}
++
+ // https://github.com/torvalds/linux/blob/master/include/uapi/linux/major.h
+ // #define FLOPPY_MAJOR		2
+ const floppyMajor = int64(2)
+@@ -452,12 +458,18 @@ func (c *Container) shareFiles(m Mount, idx int, hostSharedDir, guestSharedDir s
+ 	}
+ 
+ 	filename := fmt.Sprintf("%s-%s-%s", c.id, hex.EncodeToString(randBytes), filepath.Base(m.Destination))
+-	guestDest := filepath.Join(guestSharedDir, filename)
++	var guestDest string
++	_, needCopy := safeCopyFiles[filepath.Base(m.Destination)]
++	if needCopy {
++		guestDest = filepath.Join(kataGuestStorageDir, filename)
++	} else {
++		guestDest = filepath.Join(guestSharedDir, filename)
++	}
+ 
+ 	// copy file to contaier's rootfs if filesystem sharing is not supported, otherwise
+ 	// bind mount it in the shared directory.
+ 	caps := c.sandbox.hypervisor.capabilities()
+-	if !caps.IsFsSharingSupported() {
++	if !caps.IsFsSharingSupported() || needCopy {
+ 		c.Logger().Debug("filesystem sharing is not supported, files will be copied")
+ 
+ 		fileInfo, err := os.Stat(m.Source)
+-- 
+2.14.3 (Apple Git-98)
+

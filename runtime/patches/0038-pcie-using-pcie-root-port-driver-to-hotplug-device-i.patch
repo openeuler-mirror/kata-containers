@@ -1,0 +1,501 @@
+From 5a220e9be1cfb03316a62aa00d2040638ba1a855 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 18 Aug 2020 15:15:52 +0800
+Subject: [PATCH 38/50] pcie: using pcie-root-port driver to hotplug device in
+ aarch64
+
+reason: Since qemu with "virt" machine type doesn't support hotplug
+device in the pcie.0 root bus, so need to use add root port devices
+to support hotplug pci device in aarch64.
+
+we reuse the pcie_root_port config in the configuration.toml file to
+set pcie_root_port device number when qemu process start.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ vendor/github.com/intel/govmm/qemu/qemu.go |  22 ++---
+ virtcontainers/persist/api/hypervisor.go   |   5 +-
+ virtcontainers/qemu.go                     | 130 +++++++++++++++++++++++------
+ virtcontainers/qemu_arch_base.go           |   9 ++
+ virtcontainers/types/pcie.go               | 103 +++++++++++++++++++++++
+ 5 files changed, 230 insertions(+), 39 deletions(-)
+ create mode 100644 virtcontainers/types/pcie.go
+
+diff --git a/vendor/github.com/intel/govmm/qemu/qemu.go b/vendor/github.com/intel/govmm/qemu/qemu.go
+index a5e5dfaf..3e7720b4 100644
+--- a/vendor/github.com/intel/govmm/qemu/qemu.go
++++ b/vendor/github.com/intel/govmm/qemu/qemu.go
+@@ -1252,6 +1252,8 @@ type PCIeRootPortDevice struct {
+ 	Chassis string // (slot, chassis) pair is mandatory and must be unique for each pcie-root-port, >=0, default is 0x00
+ 	Slot    string // >=0, default is 0x00
+ 
++	Port string // Port number is the device index
++
+ 	Multifunction bool   // true => "on", false => "off", default is off
+ 	Addr          string // >=0, default is 0x00
+ 
+@@ -1277,6 +1279,10 @@ func (b PCIeRootPortDevice) QemuParams(config *Config) []string {
+ 
+ 	deviceParams = append(deviceParams, fmt.Sprintf("%s,id=%s", driver, b.ID))
+ 
++	if b.Port != "" {
++		deviceParams = append(deviceParams, fmt.Sprintf("port=%s", b.Port))
++	}
++
+ 	if b.Bus == "" {
+ 		b.Bus = "pcie.0"
+ 	}
+@@ -1287,20 +1293,10 @@ func (b PCIeRootPortDevice) QemuParams(config *Config) []string {
+ 	}
+ 	deviceParams = append(deviceParams, fmt.Sprintf("chassis=%s", b.Chassis))
+ 
+-	if b.Slot == "" {
+-		b.Slot = "0x00"
+-	}
+-	deviceParams = append(deviceParams, fmt.Sprintf("slot=%s", b.Slot))
+-
+-	multifunction := "off"
+ 	if b.Multifunction {
+-		multifunction = "on"
+-		if b.Addr == "" {
+-			b.Addr = "0x00"
+-		}
+-		deviceParams = append(deviceParams, fmt.Sprintf("addr=%s", b.Addr))
++		deviceParams = append(deviceParams, "multifunction=on")
+ 	}
+-	deviceParams = append(deviceParams, fmt.Sprintf("multifunction=%v", multifunction))
++	deviceParams = append(deviceParams, fmt.Sprintf("addr=%s", b.Addr))
+ 
+ 	if b.BusReserve != "" {
+ 		deviceParams = append(deviceParams, fmt.Sprintf("bus-reserve=%s", b.BusReserve))
+@@ -1337,7 +1333,7 @@ func (b PCIeRootPortDevice) Valid() bool {
+ 	if b.Pref64Reserve != "" && b.Pref32Reserve != "" {
+ 		return false
+ 	}
+-	if b.ID == "" {
++	if b.ID == "" || b.Port == "" || b.Bus == "" || b.Addr == ""{
+ 		return false
+ 	}
+ 	return true
+diff --git a/virtcontainers/persist/api/hypervisor.go b/virtcontainers/persist/api/hypervisor.go
+index 375fd56b..fd61b3c2 100644
+--- a/virtcontainers/persist/api/hypervisor.go
++++ b/virtcontainers/persist/api/hypervisor.go
+@@ -5,6 +5,8 @@
+ 
+ package persistapi
+ 
++import "github.com/kata-containers/runtime/virtcontainers/types"
++
+ // Bridge is a bridge where devices can be hot plugged
+ type Bridge struct {
+ 	// DeviceAddr contains information about devices plugged and its address in the bridge
+@@ -35,7 +37,8 @@ type HypervisorState struct {
+ 
+ 	// Belows are qemu specific
+ 	// Refs: virtcontainers/qemu.go:QemuState
+-	Bridges []Bridge
++	Bridges           []Bridge
++	PCIeRootPortsPool *types.PCIeRootPortPool
+ 	// HotpluggedCPUs is the list of CPUs that were hot-added
+ 	HotpluggedVCPUs      []CPUDevice
+ 	HotpluggedMemory     int
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index c2b65376..a10c66fb 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -64,8 +64,9 @@ type CPUDevice struct {
+ 
+ // QemuState keeps Qemu's state
+ type QemuState struct {
+-	Bridges []types.Bridge
+-	ScsiBus *types.SCSIBus
++	Bridges           []types.Bridge
++	ScsiBus           *types.SCSIBus
++	PCIeRootPortsPool *types.PCIeRootPortPool
+ 	// HotpluggedCPUs is the list of CPUs that were hot-added
+ 	HotpluggedVCPUs      []CPUDevice
+ 	HotpluggedMemory     int
+@@ -271,6 +272,9 @@ func (q *qemu) setup(id string, hypervisorConfig *HypervisorConfig) error {
+ 
+ 		q.state.HotplugVFIOOnRootBus = q.config.HotplugVFIOOnRootBus
+ 		q.state.PCIeRootPort = int(q.config.PCIeRootPort)
++		// init the PCIeRootPortsPool with pcie_root_port config value
++		q.state.PCIeRootPortsPool = &types.PCIeRootPortPool{}
++		q.state.PCIeRootPortsPool.Init(q.state.PCIeRootPort)
+ 
+ 		// The path might already exist, but in case of VM templating,
+ 		// we have to create it since the sandbox has not created it yet.
+@@ -394,9 +398,18 @@ func (q *qemu) buildDevices(initrdPath string) ([]govmmQemu.Device, *govmmQemu.I
+ 		return nil, nil, err
+ 	}
+ 
+-	// Add bridges before any other devices. This way we make sure that
+-	// bridge gets the first available PCI address i.e bridgePCIStartAddr
+-	devices = q.arch.appendBridges(devices)
++	machine, err := q.getQemuMachine()
++	if err != nil {
++		return nil, nil, err
++	}
++	switch machine.Type {
++	case QemuVirt:
++		devices = q.arch.appendRootPorts(devices, q.state.PCIeRootPortsPool)
++	default:
++		// Add bridges before any other devices. This way we make sure that
++		// bridge gets the first available PCI address i.e bridgePCIStartAddr
++		devices = q.arch.appendBridges(devices)
++	}
+ 
+ 	devices, err = q.arch.appendConsole(devices, console)
+ 	if err != nil {
+@@ -608,7 +621,7 @@ func (q *qemu) createSandbox(ctx context.Context, id string, networkNS NetworkNa
+ 	// Add PCIe Root Port devices to hypervisor
+ 	// The pcie.0 bus do not support hot-plug, but PCIe device can be hot-plugged into PCIe Root Port.
+ 	// For more details, please see https://github.com/qemu/qemu/blob/master/docs/pcie.txt
+-	if hypervisorConfig.PCIeRootPort > 0 {
++	if hypervisorConfig.PCIeRootPort > 0 && hypervisorConfig.HypervisorMachineType == QemuQ35 {
+ 		qemuConfig.Devices = q.arch.appendPCIeRootPortDevice(qemuConfig.Devices, hypervisorConfig.PCIeRootPort)
+ 	}
+ 
+@@ -1154,21 +1167,19 @@ func (q *qemu) hotplugAddBlockDevice(drive *config.BlockDrive, op operation, dev
+ 		}
+ 	case q.config.BlockDeviceDriver == config.VirtioBlock:
+ 		driver := "virtio-blk-pci"
+-		addr, bridge, err := q.arch.addDeviceToBridge(drive.ID, types.PCI)
++
++		addr, bus, pciAddr, err := q.getPciAddress(drive.ID, types.PCI)
+ 		if err != nil {
+ 			return err
+ 		}
+-
+ 		defer func() {
+ 			if err != nil {
+-				q.arch.removeDeviceFromBridge(drive.ID)
++				q.putPciAddress(drive.ID)
+ 			}
+ 		}()
++		drive.PCIAddr = pciAddr
+ 
+-		// PCI address is in the format bridge-addr/device-addr eg. "03/02"
+-		drive.PCIAddr = fmt.Sprintf("%02x", bridge.Addr) + "/" + addr
+-
+-		if err = q.qmpMonitorCh.qmp.ExecutePCIDeviceAdd(q.qmpMonitorCh.ctx, drive.ID, devID, driver, addr, bridge.ID, romFile, 0, true, defaultDisableModern); err != nil {
++		if err = q.qmpMonitorCh.qmp.ExecutePCIDeviceAdd(q.qmpMonitorCh.ctx, drive.ID, devID, driver, addr, bus, romFile, 0, true, defaultDisableModern); err != nil {
+ 			return err
+ 		}
+ 	case q.config.BlockDeviceDriver == config.VirtioSCSI:
+@@ -1249,7 +1260,7 @@ func (q *qemu) hotplugBlockDevice(drive *config.BlockDrive, op operation) error
+ 		err = q.hotplugAddBlockDevice(drive, op, devID)
+ 	} else {
+ 		if q.config.BlockDeviceDriver == config.VirtioBlock {
+-			if err := q.arch.removeDeviceFromBridge(drive.ID); err != nil {
++			if err := q.putPciAddress(drive.ID); err != nil {
+ 				return err
+ 			}
+ 		} else if q.config.BlockDeviceDriver == config.VirtioSCSI {
+@@ -1345,22 +1356,22 @@ func (q *qemu) hotplugVFIODevice(device *config.VFIODev, op operation) (err erro
+ 			}
+ 		}
+ 
+-		addr, bridge, err := q.arch.addDeviceToBridge(devID, types.PCI)
++		addr, bus, _, err := q.getPciAddress(devID, types.PCI)
+ 		if err != nil {
+ 			return err
+ 		}
+ 
+ 		defer func() {
+ 			if err != nil {
+-				q.arch.removeDeviceFromBridge(devID)
++				q.putPciAddress(devID)
+ 			}
+ 		}()
+ 
+ 		switch device.Type {
+ 		case config.VFIODeviceNormalType:
+-			return q.qmpMonitorCh.qmp.ExecutePCIVFIODeviceAdd(q.qmpMonitorCh.ctx, devID, device.BDF, addr, bridge.ID, romFile)
++			return q.qmpMonitorCh.qmp.ExecutePCIVFIODeviceAdd(q.qmpMonitorCh.ctx, devID, device.BDF, addr, bus, romFile)
+ 		case config.VFIODeviceMediatedType:
+-			return q.qmpMonitorCh.qmp.ExecutePCIVFIOMediatedDeviceAdd(q.qmpMonitorCh.ctx, devID, device.SysfsDev, addr, bridge.ID, romFile)
++			return q.qmpMonitorCh.qmp.ExecutePCIVFIOMediatedDeviceAdd(q.qmpMonitorCh.ctx, devID, device.SysfsDev, addr, bus, romFile)
+ 		default:
+ 			return fmt.Errorf("Incorrect VFIO device type found")
+ 		}
+@@ -1368,7 +1379,7 @@ func (q *qemu) hotplugVFIODevice(device *config.VFIODev, op operation) (err erro
+ 		q.Logger().WithField("dev-id", devID).Info("Start hot-unplug VFIO device")
+ 
+ 		if !q.state.HotplugVFIOOnRootBus {
+-			if err := q.arch.removeDeviceFromBridge(devID); err != nil {
++			if err := q.putPciAddress(devID); err != nil {
+ 				return err
+ 			}
+ 		}
+@@ -1439,18 +1450,17 @@ func (q *qemu) hotplugNetDevice(endpoint Endpoint, op operation) (err error) {
+ 			}
+ 		}()
+ 
+-		addr, bridge, err := q.arch.addDeviceToBridge(tap.ID, types.PCI)
++		addr, bus, pciAddr, err := q.getPciAddress(tap.ID, types.PCI)
+ 		if err != nil {
+ 			return err
+ 		}
+ 
+ 		defer func() {
+ 			if err != nil {
+-				q.arch.removeDeviceFromBridge(tap.ID)
++				q.putPciAddress(tap.ID)
+ 			}
+ 		}()
+ 
+-		pciAddr := fmt.Sprintf("%02x/%s", bridge.Addr, addr)
+ 		endpoint.SetPciAddr(pciAddr)
+ 
+ 		var machine govmmQemu.Machine
+@@ -1459,14 +1469,14 @@ func (q *qemu) hotplugNetDevice(endpoint Endpoint, op operation) (err error) {
+ 			return err
+ 		}
+ 		if machine.Type == QemuCCWVirtio {
+-			devNoHotplug := fmt.Sprintf("fe.%x.%x", bridge.Addr, addr)
++			devNoHotplug := fmt.Sprintf("fe.%x.%x", bus, addr)
+ 			return q.qmpMonitorCh.qmp.ExecuteNetCCWDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), devNoHotplug, int(q.config.NumVCPUs))
+ 		}
+-		return q.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), addr, bridge.ID, romFile, int(q.config.NumVCPUs), defaultDisableModern)
++		return q.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), addr, bus, romFile, int(q.config.NumVCPUs), defaultDisableModern)
+ 
+ 	}
+ 
+-	if err := q.arch.removeDeviceFromBridge(tap.ID); err != nil {
++	if err := q.putPciAddress(tap.ID); err != nil {
+ 		return err
+ 	}
+ 
+@@ -2042,6 +2052,21 @@ func genericMemoryTopology(memoryMb, hostMemoryMb uint64, slots uint8, memoryOff
+ 	return memory
+ }
+ 
++func genericAppendRootPorts(devices []govmmQemu.Device, rootPorts *types.PCIeRootPortPool) []govmmQemu.Device {
++	for _, rp := range rootPorts.Items {
++		devices = append(devices, govmmQemu.PCIeRootPortDevice{
++			Port:          rp.Port,
++			Bus:           rp.Bus,
++			ID:            rp.ID,
++			Chassis:       strconv.Itoa(int(rp.Chassis)),
++			Multifunction: rp.Multifunction,
++			Addr:          fmt.Sprintf("0x%s.0x%s", rp.Slot, rp.Function),
++		})
++	}
++
++	return devices
++}
++
+ // genericAppendPCIeRootPort appends to devices the given pcie-root-port
+ func genericAppendPCIeRootPort(devices []govmmQemu.Device, number uint32, machineType string) []govmmQemu.Device {
+ 	var (
+@@ -2241,6 +2266,7 @@ func (q *qemu) save() (s persistapi.HypervisorState) {
+ 	s.HotpluggedMemory = q.state.HotpluggedMemory
+ 	s.HotplugVFIOOnRootBus = q.state.HotplugVFIOOnRootBus
+ 	s.PCIeRootPort = q.state.PCIeRootPort
++	s.PCIeRootPortsPool = q.state.PCIeRootPortsPool
+ 
+ 	for _, bridge := range q.arch.getBridges() {
+ 		s.Bridges = append(s.Bridges, persistapi.Bridge{
+@@ -2265,6 +2291,7 @@ func (q *qemu) load(s persistapi.HypervisorState) {
+ 	q.state.HotplugVFIOOnRootBus = s.HotplugVFIOOnRootBus
+ 	q.state.VirtiofsdPid = s.VirtiofsdPid
+ 	q.state.PCIeRootPort = s.PCIeRootPort
++	q.state.PCIeRootPortsPool = s.PCIeRootPortsPool
+ 
+ 	for _, bridge := range s.Bridges {
+ 		q.state.Bridges = append(q.state.Bridges, types.NewBridge(types.Type(bridge.Type), bridge.ID, bridge.DeviceAddr, bridge.Addr))
+@@ -2302,3 +2329,56 @@ func (q *qemu) generateSocket(id string, useVsock bool) (interface{}, error) {
+ func (q *qemu) getMemorySize() uint32 {
+ 	return q.config.MemorySize + uint32(q.state.HotpluggedMemory)
+ }
++
++// getPciAddress allocate the pci slot to hotplugged device and
++// return the pci slot address
++func (q *qemu) getPciAddress(devID string, t types.Type) (slot, bus, pciAddr string, err error) {
++	machine, err := q.getQemuMachine()
++	if err != nil {
++		return "", "", "", err
++	}
++
++	switch machine.Type {
++	case QemuVirt:
++		rp, err := q.state.PCIeRootPortsPool.AddDevice(devID)
++		if err != nil {
++			return "", "", "", err
++		}
++		// PCIe Root Port only have one slot
++		slot = "0x0"
++		// pciAddr specifies the slot and function of the Root Port and the slot of the device
++		pciAddr = fmt.Sprintf("%s.%s/00", rp.Slot, rp.Function)
++		bus = rp.ID
++	default:
++		var bridge types.Bridge
++		slot, bridge, err = q.arch.addDeviceToBridge(devID, t)
++		if err != nil {
++			return "", "", "", err
++		}
++		bus = bridge.ID
++		// PCI address is in the format bridge-addr.0/device-addr eg. "03.0/02"
++		pciAddr = fmt.Sprintf("%02x.0", bridge.Addr) + "/" + slot
++	}
++	return slot, bus, pciAddr, nil
++}
++
++func (q *qemu) putPciAddress(devID string) error {
++	machine, err := q.getQemuMachine()
++	if err != nil {
++		return err
++	}
++
++	switch machine.Type {
++	case QemuVirt:
++		err := q.state.PCIeRootPortsPool.RemoveDevice(devID)
++		if err != nil {
++			return err
++		}
++	default:
++		if err := q.arch.removeDeviceFromBridge(devID); err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
+diff --git a/virtcontainers/qemu_arch_base.go b/virtcontainers/qemu_arch_base.go
+index 9d72dd09..cb045530 100644
+--- a/virtcontainers/qemu_arch_base.go
++++ b/virtcontainers/qemu_arch_base.go
+@@ -130,6 +130,9 @@ type qemuArch interface {
+ 
+ 	// appendPCIeRootPortDevice appends a pcie-root-port device to pcie.0 bus
+ 	appendPCIeRootPortDevice(devices []govmmQemu.Device, number uint32) []govmmQemu.Device
++
++	// appendRootPorts appends a pcie-root-port device to devices when qemu machine type is "virt"
++	appendRootPorts(devices []govmmQemu.Device, rootPorts *types.PCIeRootPortPool) []govmmQemu.Device
+ }
+ 
+ type qemuArchBase struct {
+@@ -766,3 +769,9 @@ func (q *qemuArchBase) addBridge(b types.Bridge) {
+ func (q *qemuArchBase) appendPCIeRootPortDevice(devices []govmmQemu.Device, number uint32) []govmmQemu.Device {
+ 	return genericAppendPCIeRootPort(devices, number, q.machineType)
+ }
++
++// appendRootPorts appends a pcie-root-port device to devices when qemu machine type is "virt"
++// which is different appendPCIeRootPortDevice function
++func (q *qemuArchBase) appendRootPorts(devices []govmmQemu.Device, rootPorts *types.PCIeRootPortPool) []govmmQemu.Device {
++	return genericAppendRootPorts(devices, rootPorts)
++}
+diff --git a/virtcontainers/types/pcie.go b/virtcontainers/types/pcie.go
+new file mode 100644
+index 00000000..83eb6944
+--- /dev/null
++++ b/virtcontainers/types/pcie.go
+@@ -0,0 +1,103 @@
++package types
++
++import (
++	"fmt"
++)
++
++const (
++	maxRootPortsCapacity = 25
++	slotPerDevice        = 7
++
++	// PCIeRootBus is "pcie.0"
++	PCIeRootBus = "pcie.0"
++
++	// startPort specifies the start port of pcie-root-port
++	// for the first slot of "pcie.0" is reserved, so the 1~7 ports are also reserved
++	startPort      = 8
++	funcNumPerSlot = 8
++)
++
++// PCIeRootPort describe the PCIe Root Port
++type PCIeRootPort struct {
++	// DeviceID specify the device hotplug on the Root Port
++	DeviceID string
++
++	// Port number is the Root Port index
++	Port string
++
++	// Bus number where the Root Port is plugged, typically pcie.0
++	Bus string
++
++	// ID is used to identify the pcie-root-port in qemu
++	ID string
++
++	// Slot specifies slot address of Root Port
++	Slot string
++
++	// Function specifies function of Root Port
++	Function string
++
++	// Chassis number
++	Chassis uint32
++
++	// Multifunction is used to specify the pcie-root-port is multifunction supported
++	Multifunction bool
++}
++
++// PCIeRootPortPool describe a set of PCIe Root Ports
++type PCIeRootPortPool struct {
++	// Items contains information about devices plugged and number limit
++	Items []*PCIeRootPort
++}
++
++// Init Initialized the PCIeRootPortPool instance
++func (rp *PCIeRootPortPool) Init(number int) {
++	if number == 0 || number > maxRootPortsCapacity {
++		number = maxRootPortsCapacity
++	}
++
++	for i := 0; i < number; i++ {
++		dev := &PCIeRootPort{
++			DeviceID: "",
++			Port:     fmt.Sprintf("0x%x", startPort+i),
++			Bus:      PCIeRootBus,
++			ID:       fmt.Sprintf("pci.%d", i+1),
++			Chassis:  uint32(i + 1),
++		}
++
++		major := i / funcNumPerSlot
++		minor := i % funcNumPerSlot
++		dev.Multifunction = false
++		if minor == 0 {
++			dev.Multifunction = true
++		}
++		dev.Slot = fmt.Sprintf("%02x", major+1)
++		dev.Function = fmt.Sprintf("%x", minor)
++
++		rp.Items = append(rp.Items, dev)
++	}
++}
++
++// AddDevice add a device to the PCIeRootPortPool
++func (rp *PCIeRootPortPool) AddDevice(devID string) (*PCIeRootPort, error) {
++	for _, it := range rp.Items {
++		if it.DeviceID == "" {
++			it.DeviceID = devID
++			return it, nil
++		}
++	}
++	return nil, fmt.Errorf("Unable to hot plug device on Root Ports: there are not empty slots")
++}
++
++// RemoveDevice remove a device from the PCIeRootPortPool
++func (rp *PCIeRootPortPool) RemoveDevice(devID string) error {
++	for _, it := range rp.Items {
++		if it.DeviceID == devID {
++			// free address to re-use the same slot with other devices
++			it.DeviceID = ""
++			return nil
++		}
++	}
++
++	return fmt.Errorf("Unable to hot unplug device %s: not present on Root Port", devID)
++}
+-- 
+2.14.3 (Apple Git-98)
+

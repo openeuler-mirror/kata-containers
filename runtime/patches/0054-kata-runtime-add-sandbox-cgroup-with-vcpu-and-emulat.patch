@@ -1,0 +1,376 @@
+From 98a3c4677261e1c0364015f36928cddfb0af253e Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Wed, 9 Sep 2020 16:45:24 +0800
+Subject: [PATCH 2/5] kata-runtime: add sandbox cgroup with vcpu and emulator
+ switch
+
+reason: add sandbox cgroup with vcpu and emulator switch, if
+sandbox_cgroup_with_emulator is true, it will overload the feature
+of sandbox_cgroup_only, there will be two cgroups, vcpu and emulator
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ cli/config/configuration-qemu.toml.in         | 12 +++++++++
+ cli/kata-env.go                               | 38 ++++++++++++++-------------
+ pkg/katautils/config.go                       | 18 +++++++------
+ virtcontainers/api.go                         |  4 ++-
+ virtcontainers/container.go                   |  6 ++---
+ virtcontainers/persist.go                     | 30 +++++++++++----------
+ virtcontainers/persist/api/config.go          |  2 ++
+ virtcontainers/pkg/annotations/annotations.go |  2 ++
+ virtcontainers/pkg/oci/utils.go               | 13 +++++++++
+ virtcontainers/sandbox.go                     | 23 +++++++++++-----
+ 10 files changed, 97 insertions(+), 51 deletions(-)
+
+diff --git a/cli/config/configuration-qemu.toml.in b/cli/config/configuration-qemu.toml.in
+index e57a954..fae88f9 100644
+--- a/cli/config/configuration-qemu.toml.in
++++ b/cli/config/configuration-qemu.toml.in
+@@ -477,6 +477,18 @@ enable_compat_old_cni = true
+ # See: https://godoc.org/github.com/kata-containers/runtime/virtcontainers#ContainerType
+ sandbox_cgroup_only=@DEFSANDBOXCGROUPONLY@
+ 
++# It is a new host cgroup solution to limit the kata resouce in the host different from the 
++# community original solution.If sandbox_cgroup_with_emulator is enabled, it will override
++# the config of sandbox_cgroup_only. Each Pod corresponds to a pod level cgroup directory
++# which is named with sandboxID. In each pod level cgroup, it contains two sub cgroup 
++# directory: vcpu and emulator, these two sub cgroup only valid in the CPU cgroup subsystem,
++# because we just want to distinguish the emulator main thread and vcpu thread in the CPU 
++# cgroup subsystem.And with this config enabled, kata-runtime and related sub processes will
++# added into the vcpu cgroup directory with resource limited, and qemu main thread and other
++# non-vcpu threads will be moved into the emulator cgroup without resource limit, which will
++# improve the IO throughput for kata-containers.
++sandbox_cgroup_with_emulator = true
++
+ # Enabled experimental feature list, format: ["a", "b"].
+ # Experimental features are features not stable enough for production,
+ # they may break compatibility, and are prepared for a big version bump.
+diff --git a/cli/kata-env.go b/cli/kata-env.go
+index d8a6068..48026fe 100644
+--- a/cli/kata-env.go
++++ b/cli/kata-env.go
+@@ -63,15 +63,16 @@ type RuntimeConfigInfo struct {
+ 
+ // RuntimeInfo stores runtime details.
+ type RuntimeInfo struct {
+-	Version             RuntimeVersionInfo
+-	Config              RuntimeConfigInfo
+-	Debug               bool
+-	Trace               bool
+-	DisableGuestSeccomp bool
+-	DisableNewNetNs     bool
+-	SandboxCgroupOnly   bool
+-	Experimental        []exp.Feature
+-	Path                string
++	Version                   RuntimeVersionInfo
++	Config                    RuntimeConfigInfo
++	Debug                     bool
++	Trace                     bool
++	DisableGuestSeccomp       bool
++	DisableNewNetNs           bool
++	SandboxCgroupOnly         bool
++	SandboxCgroupWithEmulator bool
++	Experimental              []exp.Feature
++	Path                      string
+ }
+ 
+ type VersionInfo struct {
+@@ -194,15 +195,16 @@ func getRuntimeInfo(configFile string, config oci.RuntimeConfig) RuntimeInfo {
+ 	runtimePath, _ := os.Executable()
+ 
+ 	return RuntimeInfo{
+-		Debug:               config.Debug,
+-		Trace:               config.Trace,
+-		Version:             runtimeVersion,
+-		Config:              runtimeConfig,
+-		Path:                runtimePath,
+-		DisableNewNetNs:     config.DisableNewNetNs,
+-		SandboxCgroupOnly:   config.SandboxCgroupOnly,
+-		Experimental:        config.Experimental,
+-		DisableGuestSeccomp: config.DisableGuestSeccomp,
++		Debug:                     config.Debug,
++		Trace:                     config.Trace,
++		Version:                   runtimeVersion,
++		Config:                    runtimeConfig,
++		Path:                      runtimePath,
++		DisableNewNetNs:           config.DisableNewNetNs,
++		SandboxCgroupOnly:         config.SandboxCgroupOnly,
++		SandboxCgroupWithEmulator: config.SandboxCgroupWithEmulator,
++		Experimental:              config.Experimental,
++		DisableGuestSeccomp:       config.DisableGuestSeccomp,
+ 	}
+ }
+ 
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index 3365b3f..89e46f6 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -139,14 +139,15 @@ type proxy struct {
+ }
+ 
+ type runtime struct {
+-	Debug               bool     `toml:"enable_debug"`
+-	Tracing             bool     `toml:"enable_tracing"`
+-	DisableNewNetNs     bool     `toml:"disable_new_netns"`
+-	EnableCompatOldCNI  bool     `toml:"enable_compat_old_cni"`
+-	DisableGuestSeccomp bool     `toml:"disable_guest_seccomp"`
+-	SandboxCgroupOnly   bool     `toml:"sandbox_cgroup_only"`
+-	Experimental        []string `toml:"experimental"`
+-	InterNetworkModel   string   `toml:"internetworking_model"`
++	Debug                     bool     `toml:"enable_debug"`
++	Tracing                   bool     `toml:"enable_tracing"`
++	DisableNewNetNs           bool     `toml:"disable_new_netns"`
++	EnableCompatOldCNI        bool     `toml:"enable_compat_old_cni"`
++	DisableGuestSeccomp       bool     `toml:"disable_guest_seccomp"`
++	SandboxCgroupOnly         bool     `toml:"sandbox_cgroup_only"`
++	SandboxCgroupWithEmulator bool     `toml:"sandbox_cgroup_with_emulator"`
++	Experimental              []string `toml:"experimental"`
++	InterNetworkModel         string   `toml:"internetworking_model"`
+ }
+ 
+ type shim struct {
+@@ -1252,6 +1253,7 @@ func LoadConfiguration(configPath string, ignoreLogging, builtIn bool, debugFlag
+ 	}
+ 
+ 	config.SandboxCgroupOnly = tomlConf.Runtime.SandboxCgroupOnly
++	config.SandboxCgroupWithEmulator = tomlConf.Runtime.SandboxCgroupWithEmulator
+ 	config.DisableNewNetNs = tomlConf.Runtime.DisableNewNetNs
+ 	config.EnableCompatOldCNI = tomlConf.Runtime.EnableCompatOldCNI
+ 	for _, f := range tomlConf.Runtime.Experimental {
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index ca5412a..08bcbb5 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -103,7 +103,9 @@ func createSandboxFromConfig(ctx context.Context, sandboxConfig SandboxConfig, f
+ 	}()
+ 
+ 	// Move runtime to sandbox cgroup so all process are created there.
+-	if s.config.SandboxCgroupOnly {
++	if s.config.SandboxCgroupWithEmulator{
++		// emulator
++	} else if s.config.SandboxCgroupOnly {
+ 		if err := s.setupSandboxCgroup(); err != nil {
+ 			return nil, err
+ 		}
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 4060ebb..1b70382 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -1009,7 +1009,7 @@ func (c *Container) create() (err error) {
+ 		}
+ 	}
+ 
+-	if !rootless.IsRootless() && !c.sandbox.config.SandboxCgroupOnly {
++	if !rootless.IsRootless() && !c.sandbox.config.SandboxCgroupOnly && !c.sandbox.config.SandboxCgroupWithEmulator {
+ 		if err = c.cgroupsCreate(); err != nil {
+ 			return
+ 		}
+@@ -1034,7 +1034,7 @@ func (c *Container) delete() error {
+ 	}
+ 
+ 	// If running rootless, there are no cgroups to remove
+-	if !c.sandbox.config.SandboxCgroupOnly || !rootless.IsRootless() {
++	if !c.sandbox.config.SandboxCgroupWithEmulator && (!c.sandbox.config.SandboxCgroupOnly || !rootless.IsRootless()) {
+ 		if err := c.cgroupsDelete(); err != nil {
+ 			return err
+ 		}
+@@ -1348,7 +1348,7 @@ func (c *Container) update(resources specs.LinuxResources) error {
+ 		}
+ 	}
+ 
+-	if !c.sandbox.config.SandboxCgroupOnly {
++	if !c.sandbox.config.SandboxCgroupWithEmulator && !c.sandbox.config.SandboxCgroupOnly {
+ 		if err := c.cgroupsUpdate(resources); err != nil {
+ 			return err
+ 		}
+diff --git a/virtcontainers/persist.go b/virtcontainers/persist.go
+index fe00bf9..efa4506 100644
+--- a/virtcontainers/persist.go
++++ b/virtcontainers/persist.go
+@@ -194,13 +194,14 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 			InterworkingModel:  int(sconfig.NetworkConfig.InterworkingModel),
+ 		},
+ 
+-		ShmSize:             sconfig.ShmSize,
+-		SharePidNs:          sconfig.SharePidNs,
+-		Stateful:            sconfig.Stateful,
+-		SystemdCgroup:       sconfig.SystemdCgroup,
+-		SandboxCgroupOnly:   sconfig.SandboxCgroupOnly,
+-		DisableGuestSeccomp: sconfig.DisableGuestSeccomp,
+-		Cgroups:             sconfig.Cgroups,
++		ShmSize:                   sconfig.ShmSize,
++		SharePidNs:                sconfig.SharePidNs,
++		Stateful:                  sconfig.Stateful,
++		SystemdCgroup:             sconfig.SystemdCgroup,
++		SandboxCgroupOnly:         sconfig.SandboxCgroupOnly,
++		SandboxCgroupWithEmulator: sconfig.SandboxCgroupWithEmulator,
++		DisableGuestSeccomp:       sconfig.DisableGuestSeccomp,
++		Cgroups:                   sconfig.Cgroups,
+ 	}
+ 
+ 	for _, e := range sconfig.Experimental {
+@@ -485,13 +486,14 @@ func loadSandboxConfig(id string) (*SandboxConfig, error) {
+ 			InterworkingModel:  NetInterworkingModel(savedConf.NetworkConfig.InterworkingModel),
+ 		},
+ 
+-		ShmSize:             savedConf.ShmSize,
+-		SharePidNs:          savedConf.SharePidNs,
+-		Stateful:            savedConf.Stateful,
+-		SystemdCgroup:       savedConf.SystemdCgroup,
+-		SandboxCgroupOnly:   savedConf.SandboxCgroupOnly,
+-		DisableGuestSeccomp: savedConf.DisableGuestSeccomp,
+-		Cgroups:             savedConf.Cgroups,
++		ShmSize:                   savedConf.ShmSize,
++		SharePidNs:                savedConf.SharePidNs,
++		Stateful:                  savedConf.Stateful,
++		SystemdCgroup:             savedConf.SystemdCgroup,
++		SandboxCgroupOnly:         savedConf.SandboxCgroupOnly,
++		SandboxCgroupWithEmulator: savedConf.SandboxCgroupWithEmulator,
++		DisableGuestSeccomp:       savedConf.DisableGuestSeccomp,
++		Cgroups:                   savedConf.Cgroups,
+ 	}
+ 
+ 	for _, name := range savedConf.Experimental {
+diff --git a/virtcontainers/persist/api/config.go b/virtcontainers/persist/api/config.go
+index 3a2df32..28204fc 100644
+--- a/virtcontainers/persist/api/config.go
++++ b/virtcontainers/persist/api/config.go
+@@ -258,6 +258,8 @@ type SandboxConfig struct {
+ 	// SandboxCgroupOnly enables cgroup only at podlevel in the host
+ 	SandboxCgroupOnly bool
+ 
++	SandboxCgroupWithEmulator bool
++
+ 	DisableGuestSeccomp bool
+ 
+ 	// Experimental enables experimental features
+diff --git a/virtcontainers/pkg/annotations/annotations.go b/virtcontainers/pkg/annotations/annotations.go
+index 528dfa6..96c4ef2 100644
+--- a/virtcontainers/pkg/annotations/annotations.go
++++ b/virtcontainers/pkg/annotations/annotations.go
+@@ -215,6 +215,8 @@ const (
+ 	// SandboxCgroupOnly is a sandbox annotation that determines if kata processes are managed only in sandbox cgroup.
+ 	SandboxCgroupOnly = kataAnnotRuntimePrefix + "sandbox_cgroup_only"
+ 
++	SandboxCgroupWithEmulator = kataAnnotRuntimePrefix + "sandbox_cgroup_with_emulator"
++
+ 	// Experimental is a sandbox annotation that determines if experimental features enabled.
+ 	Experimental = kataAnnotRuntimePrefix + "experimental"
+ 
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index 3b2af75..91067fb 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -139,6 +139,8 @@ type RuntimeConfig struct {
+ 	//Determines kata processes are managed only in sandbox cgroup
+ 	SandboxCgroupOnly bool
+ 
++	SandboxCgroupWithEmulator bool
++
+ 	//Experimental features enabled
+ 	Experimental []exp.Feature
+ }
+@@ -746,6 +748,15 @@ func addRuntimeConfigOverrides(ocispec specs.Spec, sbConfig *vc.SandboxConfig) e
+ 		sbConfig.SandboxCgroupOnly = sandboxCgroupOnly
+ 	}
+ 
++	if value, ok := ocispec.Annotations[vcAnnotations.SandboxCgroupWithEmulator]; ok {
++		sandboxCgroupWithEmulator, err := strconv.ParseBool(value)
++		if err != nil {
++			return fmt.Errorf("error parsing annotation for sandbox_cgroup_with_emulator : Please specify boolean value 'true|false'")
++		}
++
++		sbConfig.SandboxCgroupWithEmulator = sandboxCgroupWithEmulator
++	}
++
+ 	if value, ok := ocispec.Annotations[vcAnnotations.Experimental]; ok {
+ 		features := strings.Split(value, " ")
+ 		sbConfig.Experimental = []exp.Feature{}
+@@ -869,6 +880,8 @@ func SandboxConfig(ocispec specs.Spec, runtime RuntimeConfig, bundlePath, cid, c
+ 
+ 		SandboxCgroupOnly: runtime.SandboxCgroupOnly,
+ 
++		SandboxCgroupWithEmulator: runtime.SandboxCgroupWithEmulator,
++
+ 		DisableGuestSeccomp: runtime.DisableGuestSeccomp,
+ 
+ 		// Q: Is this really necessary? @weizhang555
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 174e6cb..b479cf5 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -126,6 +126,8 @@ type SandboxConfig struct {
+ 	// SandboxCgroupOnly enables cgroup only at podlevel in the host
+ 	SandboxCgroupOnly bool
+ 
++	SandboxCgroupWithEmulator bool
++
+ 	DisableGuestSeccomp bool
+ 
+ 	// Experimental features enabled
+@@ -1532,8 +1534,9 @@ func (s *Sandbox) Stats() (SandboxStats, error) {
+ 
+ 	var path string
+ 	var cgroupSubsystems cgroups.Hierarchy
+-
+-	if s.config.SandboxCgroupOnly {
++	if !s.config.SandboxCgroupWithEmulator {
++		// vcpu and emulator
++	} else if s.config.SandboxCgroupOnly {
+ 		cgroupSubsystems = cgroups.V1
+ 		path = s.state.CgroupPath
+ 	} else {
+@@ -1793,7 +1796,9 @@ func (s *Sandbox) HotplugAddDevice(device api.Device, devType config.DeviceType)
+ 	span, _ := s.trace("HotplugAddDevice")
+ 	defer span.Finish()
+ 
+-	if s.config.SandboxCgroupOnly {
++	if s.config.SandboxCgroupWithEmulator {
++		// emulator
++	} else if s.config.SandboxCgroupOnly {
+ 		// We are about to add a device to the hypervisor,
+ 		// the device cgroup MUST be updated since the hypervisor
+ 		// will need access to such device
+@@ -1849,7 +1854,9 @@ func (s *Sandbox) HotplugAddDevice(device api.Device, devType config.DeviceType)
+ // Sandbox implement DeviceReceiver interface from device/api/interface.go
+ func (s *Sandbox) HotplugRemoveDevice(device api.Device, devType config.DeviceType) error {
+ 	defer func() {
+-		if s.config.SandboxCgroupOnly {
++		if s.config.SandboxCgroupWithEmulator {
++
++		} else if s.config.SandboxCgroupOnly {
+ 			// Remove device from cgroup, the hypervisor
+ 			// should not have access to such device anymore.
+ 			hdev := device.GetHostPath()
+@@ -2107,7 +2114,7 @@ func (s *Sandbox) cgroupsUpdate() error {
+ 	// If Kata is configured for SandboxCgroupOnly, the VMM and its processes are already
+ 	// in the Kata sandbox cgroup (inherited). No need to move threads/processes, and we should
+ 	// rely on parent's cgroup CPU/memory values
+-	if s.config.SandboxCgroupOnly {
++	if s.config.SandboxCgroupWithEmulator || s.config.SandboxCgroupOnly {
+ 		return nil
+ 	}
+ 
+@@ -2154,7 +2161,9 @@ func (s *Sandbox) cgroupsDelete() error {
+ 	var path string
+ 	var cgroupSubsystems cgroups.Hierarchy
+ 
+-	if s.config.SandboxCgroupOnly {
++	if s.config.SandboxCgroupWithEmulator {
++		// emulator
++	} else if s.config.SandboxCgroupOnly {
+ 		return s.cgroupMgr.Destroy()
+ 	}
+ 
+@@ -2197,7 +2206,7 @@ func (s *Sandbox) constrainHypervisor(cgroup cgroups.Cgroup) error {
+ 	// Kata/VMM into account, Kata may fail to boot due to being overconstrained.
+ 	// If !SandboxCgroupOnly, place the VMM into an unconstrained cgroup, and the vCPU threads into constrained
+ 	// cgroup
+-	if s.config.SandboxCgroupOnly {
++	if s.config.SandboxCgroupOnly || s.config.SandboxCgroupWithEmulator {
+ 		// Kata components were moved into the sandbox-cgroup already, so VMM
+ 		// will already land there as well. No need to take action
+ 		return nil
+-- 
+1.8.3.1
+

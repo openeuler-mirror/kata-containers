@@ -1,0 +1,104 @@
+From 9cf769178b8f73c7fd624895589e918d6c7b0645 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 17 Aug 2020 16:29:17 +0800
+Subject: [PATCH 30/50] network: kata-network list-routes support display
+ compatible format
+
+reason: kata-network list-routes subcommand support display compatible
+format when enable_compat_old_cni config is enabled.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/api.go             | 13 ++++++++++++-
+ virtcontainers/network.go         | 29 +++++++++++++++++++++++++++++
+ virtcontainers/pkg/types/types.go | 10 +++++-----
+ 3 files changed, 46 insertions(+), 6 deletions(-)
+
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index 2331eb94..a4bf41bb 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -1003,7 +1003,18 @@ func ListRoutes(ctx context.Context, sandboxID string) ([]*vcTypes.Route, error)
+ 	}
+ 	defer s.releaseStatelessSandbox()
+ 
+-	return s.ListRoutes()
++	routes, err := s.ListRoutes()
++	if err != nil {
++		return nil, err
++	}
++
++	// If enable_compat_old_cni is enabled, convert routes info to
++	// compatible display format
++	if s.config.NetworkConfig.EnableCompatOldCNI {
++		return convertToDisplayRoutes(&routes), nil
++	}
++
++	return routes, nil
+ }
+ 
+ // CleanupContaienr is used by shimv2 to stop and delete a container exclusively, once there is no container
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index c7066a11..488bd00c 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -1384,6 +1384,35 @@ func convertToCompatInterfaces(es *[]Endpoint) []*vcTypes.Interface {
+ 	return infs
+ }
+ 
++// convertToDisplayRoutes convert the default route format to more simple
++// route display format, it is called when enable_compat_old_cni config
++// is enabled.
++func convertToDisplayRoutes(routes *[]*vcTypes.Route) []*vcTypes.Route {
++	var displayRoutes []*vcTypes.Route
++	if routes == nil {
++		return displayRoutes
++	}
++	for _, r := range *routes {
++		// we don't support IPV6 temporarily, so we need to filter ":" which
++		// is the characteristics of IPV6 for those default routes
++		if strings.Contains(r.Dest, ":") {
++			continue
++		}
++
++		defaultDest := r.Dest
++		if r.Dest == "" {
++			defaultDest = "default"
++		}
++		displayRoutes = append(displayRoutes, &vcTypes.Route{
++			Dest:    defaultDest,
++			Gateway: r.Gateway,
++			Device:  r.Device,
++		})
++	}
++
++	return displayRoutes
++}
++
+ // verifyInterfaceName verifies the interface name valid or not
+ func verifyInterfaceName(name string) error {
+ 	// verify `Name` before `Tapname` because of the strict rules
+diff --git a/virtcontainers/pkg/types/types.go b/virtcontainers/pkg/types/types.go
+index 71fe7fbb..b41b0c75 100644
+--- a/virtcontainers/pkg/types/types.go
++++ b/virtcontainers/pkg/types/types.go
+@@ -33,11 +33,11 @@ type Interface struct {
+ 
+ // Route describes a network route.
+ type Route struct {
+-	Dest    string
+-	Gateway string
+-	Device  string
+-	Source  string
+-	Scope   uint32
++	Dest    string `json:"dest,omitempty"`
++	Gateway string `json:"gateway,omitempty"`
++	Device  string `json:"device,omitempty"`
++	Source  string `json:"source,omitempty"`
++	Scope   uint32 `json:"scope,omitempty"`
+ }
+ 
+ //NetworkOp describes network operation
+-- 
+2.14.3 (Apple Git-98)
+

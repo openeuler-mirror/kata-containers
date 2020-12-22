@@ -1,0 +1,55 @@
+From cf595941e1d105af23bc006bf1998ac072733d0a Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sat, 25 Jul 2020 10:03:35 +0800
+Subject: [PATCH 03/50] kata-runtime: fix kata-proxy process left problem
+
+reason: stopSandbox function will send the DestroySandboxRequest
+to kata-agent in the VM and then kill the kata-proxy process in
+the host. However, if k.sendReq(DestroySandboxRequest) get error,
+stopSandbox will return immediately not execute the following kill
+kata-proxy process statement, which cause the kata-process left.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/kata_agent.go | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index a0cf190e..be5e96aa 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -976,6 +976,17 @@ func (k *kataAgent) stopSandbox(sandbox *Sandbox) error {
+ 		return errorMissingProxy
+ 	}
+ 
++	// since stopSandbox will destroy the sandbox in the VM, and we don't need
++	// kata-proxy process to communicate with kata-agent again, so we should
++	// make sure kata-proxy can be killed cleanly, even when k.sendReq(DestroySandboxRequest)
++	// return error
++	defer func() {
++		_ = k.proxy.stop(k.state.ProxyPid)
++		// clean up agent state
++		k.state.ProxyPid = -1
++		k.state.URL = ""
++	}()
++
+ 	req := &grpc.DestroySandboxRequest{}
+ 
+ 	if _, err := k.sendReq(req); err != nil {
+@@ -989,13 +1000,6 @@ func (k *kataAgent) stopSandbox(sandbox *Sandbox) error {
+ 		}
+ 	}
+ 
+-	if err := k.proxy.stop(k.state.ProxyPid); err != nil {
+-		return err
+-	}
+-
+-	// clean up agent state
+-	k.state.ProxyPid = -1
+-	k.state.URL = ""
+ 	return nil
+ }
+ 
+-- 
+2.14.3 (Apple Git-98)
+

@@ -1,0 +1,56 @@
+From 9e1478d7989fea4ee759cc13009d8de07dac2879 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 19 Aug 2020 17:01:00 +0800
+Subject: [PATCH 14/16] agent: fix init hugepages failed problem
+
+reason: fix init hugepages failed problem
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ .../runc/libcontainer/cgroups/fs/apply_raw.go        | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/vendor/github.com/opencontainers/runc/libcontainer/cgroups/fs/apply_raw.go b/vendor/github.com/opencontainers/runc/libcontainer/cgroups/fs/apply_raw.go
+index ec148b4..47aa3c3 100644
+--- a/vendor/github.com/opencontainers/runc/libcontainer/cgroups/fs/apply_raw.go
++++ b/vendor/github.com/opencontainers/runc/libcontainer/cgroups/fs/apply_raw.go
+@@ -8,11 +8,13 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"sync"
++	"time"
+ 
+ 	"github.com/opencontainers/runc/libcontainer/cgroups"
+ 	"github.com/opencontainers/runc/libcontainer/configs"
+ 	libcontainerUtils "github.com/opencontainers/runc/libcontainer/utils"
+ 	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+ )
+ 
+@@ -409,3 +411,21 @@ func CheckCpushares(path string, c uint64) error {
+ func (m *Manager) GetCgroups() (*configs.Cgroup, error) {
+ 	return m.Cgroups, nil
+ }
++
++func init() {
++	go func() {
++		var err error
++		if len(HugePageSizes) != 0 {
++			return
++		}
++		for i := 0; i < 10; i++ {
++			HugePageSizes, err = cgroups.GetHugePageSize()
++			if err == nil {
++				logrus.Infof("init hugepages ok loop=%d %v", i, err)
++				return
++			}
++			logrus.Errorf("init hugepages failed loop=%d %v", i, err)
++			time.Sleep(time.Second)
++		}
++	}()
++}
+\ No newline at end of file
+-- 
+2.14.3 (Apple Git-98)
+

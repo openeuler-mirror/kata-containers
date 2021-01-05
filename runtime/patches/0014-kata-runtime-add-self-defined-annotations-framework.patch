@@ -1,0 +1,76 @@
+From 1bd3cb85a1cf0e94b3280412d5fb47cecc4721fd Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 29 Jul 2020 10:42:49 +0800
+Subject: [PATCH 14/50] kata-runtime: add self defined annotations framework
+
+reason: add self defined annotations framework to pass some
+self defined resource for sandbox
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/pkg/oci/utils.go | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index cd8d48ce..05181efd 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -33,6 +33,10 @@ type annotationContainerType struct {
+ 	containerType vc.ContainerType
+ }
+ 
++type annotationHandler func(value string) error
++
++var annotationHandlerList = map[string]annotationHandler{}
++
+ var (
+ 	// ErrNoLinux is an error for missing Linux sections in the OCI configuration file.
+ 	ErrNoLinux = errors.New("missing Linux section")
+@@ -342,6 +346,10 @@ func addAnnotations(ocispec specs.Spec, config *vc.SandboxConfig) error {
+ 	if err := addAgentConfigOverrides(ocispec, config); err != nil {
+ 		return err
+ 	}
++
++	if err := addOtherSandboxAnnotation(ocispec, config); err != nil {
++		return err
++	}
+ 	return nil
+ }
+ 
+@@ -1016,3 +1024,33 @@ func GetOCIConfig(status vc.ContainerStatus) (specs.Spec, error) {
+ 
+ 	return *status.Spec, nil
+ }
++
++// validateOtherSandboxAnnotations validate the value of annotation
++func validateOtherSandboxAnnotations(annotation, value string) error {
++	validateHandler, ok := annotationHandlerList[annotation]
++	if !ok {
++		return fmt.Errorf("unsupport Sandbox annotation type")
++	}
++
++	return validateHandler(value)
++}
++
++// addOtherSandboxAnnotation add self defined annotation for sandbox
++func addOtherSandboxAnnotation(ocispec specs.Spec, sbConfig *vc.SandboxConfig) error {
++	otherSandboxAnnotationsKey := []string{}
++
++	for _, a := range otherSandboxAnnotationsKey {
++		value, ok := ocispec.Annotations[a]
++		if !ok {
++			continue
++		}
++
++		if err := validateOtherSandboxAnnotations(a, value); err != nil {
++			return err
++		}
++
++		sbConfig.Annotations[a] = value
++	}
++
++	return nil
++}
+-- 
+2.14.3 (Apple Git-98)
+

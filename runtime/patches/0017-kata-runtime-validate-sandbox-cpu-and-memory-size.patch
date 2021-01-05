@@ -1,0 +1,355 @@
+From e6051eb1a8c54b91c46f68eab9a63ad0e73a9221 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Fri, 7 Aug 2020 20:01:15 +0800
+Subject: [PATCH 17/50] kata-runtime: validate sandbox cpu and memory size
+
+reason:
+1. add more strict sandbox cpu and memory size check.
+2. use GetPhysicalCPUNumber func to replace goruntime.NumCPU(),
+because goruntime.NumCPU() return the CPU number of cpuset cgroup
+that current process joined, however kata-runtime process will
+change the cpuset cgroup when setupSanboxCgroup is called, which
+may cause goruntime.NumCPU() return value changed.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ pkg/katautils/config.go           | 39 ++++++++++++++++++++++++++++++++++---
+ pkg/katautils/config_test.go      | 11 ++++++++---
+ virtcontainers/pkg/oci/utils.go   | 11 +++++------
+ virtcontainers/qemu_arm64.go      |  4 ++--
+ virtcontainers/qemu_arm64_test.go |  4 ++--
+ virtcontainers/sandbox.go         |  7 ++++++-
+ virtcontainers/utils/utils.go     | 41 +++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 100 insertions(+), 17 deletions(-)
+
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index d1883c94..b9b08469 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -11,7 +11,6 @@ import (
+ 	"fmt"
+ 	"io/ioutil"
+ 	"path/filepath"
+-	goruntime "runtime"
+ 	"strings"
+ 
+ 	"github.com/BurntSushi/toml"
+@@ -285,7 +284,7 @@ func (h hypervisor) GetEntropySource() string {
+ }
+ 
+ func (h hypervisor) defaultVCPUs() uint32 {
+-	numCPUs := goruntime.NumCPU()
++	numCPUs := utils.GetPhysicalCPUNumber()
+ 
+ 	if h.NumVCPUs < 0 || h.NumVCPUs > int32(numCPUs) {
+ 		return uint32(numCPUs)
+@@ -297,8 +296,22 @@ func (h hypervisor) defaultVCPUs() uint32 {
+ 	return uint32(h.NumVCPUs)
+ }
+ 
++func (h hypervisor) checkVCPUs() error {
++	numCPUs := utils.GetPhysicalCPUNumber()
++
++	if h.NumVCPUs <= 0 {
++		return fmt.Errorf("invalid vcpus in configuration.toml! vcpus must larger than 0")
++	}
++
++	if h.NumVCPUs > int32(numCPUs) {
++		return fmt.Errorf("invalid vcpus in configuration.toml! vcpus must smaller than max CPUs: %d in machine", numCPUs)
++	}
++
++	return nil
++}
++
+ func (h hypervisor) defaultMaxVCPUs() uint32 {
+-	numcpus := uint32(goruntime.NumCPU())
++	numcpus := uint32(utils.GetPhysicalCPUNumber())
+ 	maxvcpus := vc.MaxQemuVCPUs()
+ 	reqVCPUs := h.DefaultMaxVCPUs
+ 
+@@ -324,6 +337,18 @@ func (h hypervisor) defaultMemSz() uint32 {
+ 	return h.MemorySize
+ }
+ 
++func (h hypervisor) checkMemSz() error {
++	if h.MemorySize < utils.MinMemorySizeInMB {
++		return fmt.Errorf("invalid memory size! Memory size must larger than %d MB", utils.MinMemorySizeInMB)
++	}
++
++	if h.MemorySize > utils.MaxMemorySizeInMB {
++		return fmt.Errorf("invalid memory size, memory size must smaller than %d MB", utils.MaxMemorySizeInMB)
++	}
++
++	return nil
++}
++
+ func (h hypervisor) defaultMemSlots() uint32 {
+ 	slots := h.MemSlots
+ 	if slots == 0 {
+@@ -627,6 +652,14 @@ func newQemuHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		}
+ 	}
+ 
++	if err = h.checkVCPUs(); err != nil {
++		return vc.HypervisorConfig{}, err
++	}
++
++	if err = h.checkMemSz(); err != nil {
++		return vc.HypervisorConfig{}, err
++	}
++
+ 	return vc.HypervisorConfig{
+ 		HypervisorPath:          hypervisor,
+ 		KernelPath:              kernel,
+diff --git a/pkg/katautils/config_test.go b/pkg/katautils/config_test.go
+index 31afcca6..37aa16d0 100644
+--- a/pkg/katautils/config_test.go
++++ b/pkg/katautils/config_test.go
+@@ -14,7 +14,6 @@ import (
+ 	"path"
+ 	"path/filepath"
+ 	"reflect"
+-	goruntime "runtime"
+ 	"strings"
+ 	"syscall"
+ 	"testing"
+@@ -152,7 +151,7 @@ func createAllRuntimeConfigFiles(dir, hypervisor string) (config testRuntimeConf
+ 		KernelParams:          vc.DeserializeParams(strings.Fields(kernelParams)),
+ 		HypervisorMachineType: machineType,
+ 		NumVCPUs:              defaultVCPUCount,
+-		DefaultMaxVCPUs:       uint32(goruntime.NumCPU()),
++		DefaultMaxVCPUs:       uint32(utils.GetPhysicalCPUNumber()),
+ 		MemorySize:            defaultMemSize,
+ 		DisableBlockDeviceUse: disableBlockDevice,
+ 		BlockDeviceDriver:     defaultBlockDeviceDriver,
+@@ -727,6 +726,8 @@ func TestMinimalRuntimeConfigWithVsock(t *testing.T) {
+ 	[hypervisor.qemu]
+ 	use_vsock = true
+ 	image = "` + imagePath + `"
++	default_vcpus = 1
++	default_memory = 1024
+ 
+ 	[proxy.kata]
+ 	path = "` + proxyPath + `"
+@@ -786,6 +787,8 @@ func TestNewQemuHypervisorConfig(t *testing.T) {
+ 		utils.VHostVSockDevicePath = orgVHostVSockDevicePath
+ 	}()
+ 	utils.VHostVSockDevicePath = "/dev/abc/xyz"
++	defaultVCPUs := int32(1)
++	defaultMemory := uint32(1024)
+ 
+ 	hypervisor := hypervisor{
+ 		Path:                  hypervisorPath,
+@@ -797,6 +800,8 @@ func TestNewQemuHypervisorConfig(t *testing.T) {
+ 		HotplugVFIOOnRootBus:  hotplugVFIOOnRootBus,
+ 		PCIeRootPort:          pcieRootPort,
+ 		UseVSock:              true,
++		NumVCPUs:              defaultVCPUs,
++		MemorySize:            defaultMemory,
+ 	}
+ 
+ 	files := []string{hypervisorPath, kernelPath, imagePath}
+@@ -996,7 +1001,7 @@ func TestNewShimConfig(t *testing.T) {
+ func TestHypervisorDefaults(t *testing.T) {
+ 	assert := assert.New(t)
+ 
+-	numCPUs := goruntime.NumCPU()
++	numCPUs := utils.GetPhysicalCPUNumber()
+ 
+ 	h := hypervisor{}
+ 
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index 05181efd..0a6f08c7 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -10,22 +10,21 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"path/filepath"
+-	goruntime "runtime"
+ 	"strconv"
+ 	"strings"
+ 	"syscall"
+ 
+ 	criContainerdAnnotations "github.com/containerd/cri-containerd/pkg/annotations"
+ 	crioAnnotations "github.com/cri-o/cri-o/pkg/annotations"
+-	specs "github.com/opencontainers/runtime-spec/specs-go"
+-	"github.com/sirupsen/logrus"
+-
+ 	vc "github.com/kata-containers/runtime/virtcontainers"
+ 	"github.com/kata-containers/runtime/virtcontainers/device/config"
+ 	exp "github.com/kata-containers/runtime/virtcontainers/experimental"
+ 	vcAnnotations "github.com/kata-containers/runtime/virtcontainers/pkg/annotations"
+ 	dockershimAnnotations "github.com/kata-containers/runtime/virtcontainers/pkg/annotations/dockershim"
+ 	"github.com/kata-containers/runtime/virtcontainers/types"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
++	specs "github.com/opencontainers/runtime-spec/specs-go"
++	"github.com/sirupsen/logrus"
+ )
+ 
+ type annotationContainerType struct {
+@@ -560,7 +559,7 @@ func addHypervisorCPUOverrides(ocispec specs.Spec, sbConfig *vc.SandboxConfig) e
+ 			return fmt.Errorf("Error encountered parsing annotation default_vcpus: %v, please specify numeric value", err)
+ 		}
+ 
+-		numCPUs := goruntime.NumCPU()
++		numCPUs := utils.GetPhysicalCPUNumber()
+ 
+ 		if uint32(vcpus) > uint32(numCPUs) {
+ 			return fmt.Errorf("Number of cpus %d specified in annotation default_vcpus is greater than the number of CPUs %d on the system", vcpus, numCPUs)
+@@ -575,7 +574,7 @@ func addHypervisorCPUOverrides(ocispec specs.Spec, sbConfig *vc.SandboxConfig) e
+ 			return fmt.Errorf("Error encountered parsing annotation for default_maxvcpus: %v, please specify positive numeric value", err)
+ 		}
+ 
+-		numCPUs := goruntime.NumCPU()
++		numCPUs := utils.GetPhysicalCPUNumber()
+ 		max := uint32(maxVCPUs)
+ 
+ 		if max > uint32(numCPUs) {
+diff --git a/virtcontainers/qemu_arm64.go b/virtcontainers/qemu_arm64.go
+index 6d089cf0..40fb2a80 100644
+--- a/virtcontainers/qemu_arm64.go
++++ b/virtcontainers/qemu_arm64.go
+@@ -8,11 +8,11 @@ package virtcontainers
+ import (
+ 	"context"
+ 	"io/ioutil"
+-	"runtime"
+ 	"strings"
+ 	"time"
+ 
+ 	govmmQemu "github.com/intel/govmm/qemu"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	"github.com/sirupsen/logrus"
+ )
+ 
+@@ -121,7 +121,7 @@ func MaxQemuVCPUs() uint32 {
+ 	if hostGICVersion != 0 {
+ 		return gicList[hostGICVersion]
+ 	}
+-	return uint32(runtime.NumCPU())
++	return uint32(utils.GetPhysicalCPUNumber())
+ }
+ 
+ func newQemuArch(config HypervisorConfig) qemuArch {
+diff --git a/virtcontainers/qemu_arm64_test.go b/virtcontainers/qemu_arm64_test.go
+index 40351158..372fc4a9 100644
+--- a/virtcontainers/qemu_arm64_test.go
++++ b/virtcontainers/qemu_arm64_test.go
+@@ -10,10 +10,10 @@ import (
+ 	"io/ioutil"
+ 	"os"
+ 	"path/filepath"
+-	"runtime"
+ 	"testing"
+ 
+ 	govmmQemu "github.com/intel/govmm/qemu"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -63,7 +63,7 @@ func TestMaxQemuVCPUs(t *testing.T) {
+ 	}
+ 
+ 	data := []testData{
+-		{"", uint32(runtime.NumCPU())},
++		{"", uint32(utils.GetPhysicalCPUNumber())},
+ 		{"  1:          0          0     GICv2  25 Level     vgic \n", uint32(8)},
+ 		{"  1:          0          0     GICv3  25 Level     vgic \n", uint32(123)},
+ 		{"  1:          0          0     GICv4  25 Level     vgic \n", uint32(123)},
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index a318d677..a8522b96 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -1875,6 +1875,11 @@ func (s *Sandbox) updateResources() error {
+ 	reqMemMB := uint32(sandboxMemoryByte >> utils.MibToBytesShift)
+ 	currentMemMB := s.hypervisor.getMemorySize()
+ 
++	// check request sandbox memory size larger than utils.MaxMemorySizInMB or not
++	if reqMemMB > utils.MaxMemorySizeInMB {
++		return fmt.Errorf("updateResources failed! Sandbox memory should <= %d MiB", utils.MaxMemorySizeInMB)
++	}
++
+ 	// If request hotplug memory size larger than utils.MaxHotplugMemMBOnceTime,
+ 	// inorder to avoid hotplug memory oom problem, we need to hotplug large memory
+ 	// with two steps. First, hotplug utils.MaxHotplugMemMBOnceTime size memory into
+@@ -1898,7 +1903,7 @@ func (s *Sandbox) updateResources() error {
+ 			return err
+ 		}
+ 	}
+-	if err := s.agent.onlineCPUMem(0, false, false); err != nil {
++	if err := s.agent.onlineCPUMem(0, false, true); err != nil {
+ 		return err
+ 	}
+ 	return nil
+diff --git a/virtcontainers/utils/utils.go b/virtcontainers/utils/utils.go
+index 3ae95aef..5d38e594 100644
+--- a/virtcontainers/utils/utils.go
++++ b/virtcontainers/utils/utils.go
+@@ -6,6 +6,7 @@
+ package utils
+ 
+ import (
++	"bufio"
+ 	"crypto/rand"
+ 	"errors"
+ 	"fmt"
+@@ -28,11 +29,26 @@ const MibToBytesShift = 20
+ // Max Hotplug Memory size at once time, unit is MB
+ const MaxHotplugMemMBOnceTime = 32 * 1024
+ 
++const (
++	// Min needed memory size to start a Kata VM
++	MinMemorySizeInMB   = 300
++	MinMemorySizeInByte = MinMemorySizeInMB << MibToBytesShift
++
++	// Max support memory size in the Kata VM
++	MaxMemorySizeInMB   = 512 * 1024
++	MaxMemorySizeInByte = MaxMemorySizeInMB << MibToBytesShift
++)
++
+ // MaxSocketPathLen is the effective maximum Unix domain socket length.
+ //
+ // See unix(7).
+ const MaxSocketPathLen = 107
+ 
++const (
++	procCPUInfoPath     = "/proc/cpuinfo"
++	processorIdentifier = "processor"
++)
++
+ // VHostVSockDevicePath path to vhost-vsock device
+ var VHostVSockDevicePath = "/dev/vhost-vsock"
+ 
+@@ -324,3 +340,28 @@ func IsProcessRunning(pid int, processName string, sandboxID string) bool {
+ 
+ 	return false
+ }
++
++// GetPhysicalCPUNumber return the number of the CPUs in the physical machine
++func GetPhysicalCPUNumber() int {
++	f, err := os.Open(procCPUInfoPath)
++	if err != nil {
++		return 0
++	}
++	defer f.Close()
++
++	cpuNum := 0
++	s := bufio.NewScanner(f)
++	for s.Scan() {
++		if err := s.Err(); err != nil {
++			return 0
++		}
++
++		fields := strings.Fields(s.Text())
++		if len(fields) > 0 {
++			if fields[0] == processorIdentifier {
++				cpuNum++
++			}
++		}
++	}
++	return cpuNum
++}
+-- 
+2.14.3 (Apple Git-98)
+

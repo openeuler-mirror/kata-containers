@@ -1,0 +1,119 @@
+From 0aeff2632eac58eefdc8ae438891303332831ec5 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 28 Jul 2020 20:48:24 +0800
+Subject: [PATCH 11/50] kata-runtime: check the process info before send
+ SIGKILL
+
+reason: In order to avoid the pid reuse problem, check the
+process info before send SIGKILL signal to process.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/kata_proxy.go | 18 ++++++++++++++++++
+ virtcontainers/qemu.go       |  5 +++++
+ virtcontainers/shim.go       |  9 +++++++++
+ virtcontainers/shim_test.go  |  8 ++++----
+ 4 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/virtcontainers/kata_proxy.go b/virtcontainers/kata_proxy.go
+index e04b4cff..ed272bad 100644
+--- a/virtcontainers/kata_proxy.go
++++ b/virtcontainers/kata_proxy.go
+@@ -6,8 +6,12 @@
+ package virtcontainers
+ 
+ import (
++	"fmt"
+ 	"os/exec"
++	"strings"
+ 	"syscall"
++
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ )
+ 
+ // This is the Kata Containers implementation of the proxy interface.
+@@ -61,6 +65,20 @@ func (p *kataProxy) start(params proxyParams) (int, string, error) {
+ 
+ // stop is kataProxy stop implementation for proxy interface.
+ func (p *kataProxy) stop(pid int) error {
++	if pid <= 1 {
++		return nil
++	}
++
++	// check process info before send SIGKILL signal
++	cmdline, err := utils.GetProcessCmdline(pid)
++	if err != nil {
++		return fmt.Errorf("get kata-proxy %d cmdline error: %v", pid, err)
++	}
++
++	if !strings.Contains(cmdline, KataProxyProcessName) {
++		return fmt.Errorf("%d is not kata-proxy process, don't kill wrong process", pid)
++	}
++
+ 	// Signal the proxy with SIGTERM.
+ 	return syscall.Kill(pid, syscall.SIGTERM)
+ }
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index 4b15d968..4789101d 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -967,6 +967,11 @@ func (q *qemu) stopSandbox(force bool) error {
+ 			return fmt.Errorf("force kill qemu process pid is invalid")
+ 		}
+ 
++		cmdline, _ := utils.GetProcessCmdline(qemuMainPid)
++		if !strings.Contains(cmdline, string(QemuHypervisor)) {
++			return fmt.Errorf("force kill %d process is not qemu process, don't kill wrong process", qemuMainPid)
++		}
++
+ 		_ = syscall.Kill(qemuMainPid, syscall.SIGKILL)
+ 	}
+ 
+diff --git a/virtcontainers/shim.go b/virtcontainers/shim.go
+index 6f784a03..b192b258 100644
+--- a/virtcontainers/shim.go
++++ b/virtcontainers/shim.go
+@@ -143,6 +143,15 @@ func stopShim(pid int) error {
+ 		return nil
+ 	}
+ 
++	cmdline, err := utils.GetProcessCmdline(pid)
++	if err != nil {
++		return err
++	}
++
++	if !strings.Contains(cmdline, "kata-shim") {
++		return fmt.Errorf("%d process is not kata-shim process, don't kill wrong process", pid)
++	}
++
+ 	if err := signalShim(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+ 		return err
+ 	}
+diff --git a/virtcontainers/shim_test.go b/virtcontainers/shim_test.go
+index 62471311..dc15eab0 100644
+--- a/virtcontainers/shim_test.go
++++ b/virtcontainers/shim_test.go
+@@ -176,16 +176,16 @@ func testRunSleep999AndGetCmd(t *testing.T) *exec.Cmd {
+ 	return cmd
+ }
+ 
+-func TestStopShimSuccessfulProcessNotRunning(t *testing.T) {
++func TestStopShimFailProcessNotRunning(t *testing.T) {
+ 	assert := assert.New(t)
+ 	pid := testRunSleep0AndGetPid(t)
+-	assert.NoError(stopShim(pid))
++	assert.Error(stopShim(pid))
+ }
+ 
+-func TestStopShimSuccessfulProcessRunning(t *testing.T) {
++func TestStopShimFailProcessRunning(t *testing.T) {
+ 	assert := assert.New(t)
+ 	cmd := testRunSleep999AndGetCmd(t)
+-	assert.NoError(stopShim(cmd.Process.Pid))
++	assert.Error(stopShim(cmd.Process.Pid))
+ }
+ 
+ func testIsShimRunning(t *testing.T, pid int, expected bool) {
+-- 
+2.14.3 (Apple Git-98)
+

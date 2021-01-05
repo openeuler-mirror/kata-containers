@@ -1,0 +1,94 @@
+From eea286fbafba2e95410b603fbef762e2b25eb207 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 18 Aug 2020 19:45:57 +0800
+Subject: [PATCH 08/16] agent: support get root bus path dynamically
+
+reason: support get root bus dynamically no matter the
+target arch is amd64 or arm64
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ agent.go        |  1 +
+ device_amd64.go |  6 +++++-
+ device_arm64.go | 27 ++++++++++++++++++++++++++-
+ 3 files changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/agent.go b/agent.go
+index e81c2cd..50afd7a 100644
+--- a/agent.go
++++ b/agent.go
+@@ -730,6 +730,7 @@ func (s *sandbox) listenToUdevEvents() {
+ 	defer uEvHandler.Close()
+ 
+ 	fieldLogger.Infof("Started listening for uevents")
++	rootBusPath := initRootBusPath()
+ 
+ 	for {
+ 		uEv, err := uEvHandler.Read()
+diff --git a/device_amd64.go b/device_amd64.go
+index 66bc052..26f55bf 100644
+--- a/device_amd64.go
++++ b/device_amd64.go
+@@ -8,7 +8,7 @@
+ package main
+ 
+ const (
+-	rootBusPath = "/devices/pci0000:00"
++	defaultRootBusPath = "/devices/pci0000:00"
+ 
+ 	// From https://www.kernel.org/doc/Documentation/acpi/namespace.txt
+ 	// The Linux kernel's core ACPI subsystem creates struct acpi_device
+@@ -21,3 +21,7 @@ const (
+ 	// in a subdirectory whose prefix is pfn (page frame number).
+ 	pfnDevPrefix = "/pfn"
+ )
++
++func initRootBusPath() string {
++	return defaultRootBusPath
++}
+diff --git a/device_arm64.go b/device_arm64.go
+index b73b582..d039c67 100644
+--- a/device_arm64.go
++++ b/device_arm64.go
+@@ -6,8 +6,14 @@
+ 
+ package main
+ 
++import (
++	"fmt"
++	"io/ioutil"
++	"regexp"
++)
++
+ const (
+-	rootBusPath = "/devices/platform/4010000000.pcie/pci0000:00"
++	defaultRootBusPath = "/devices/platform/4010000000.pcie/pci0000:00"
+ 
+ 	// From https://www.kernel.org/doc/Documentation/acpi/namespace.txt
+ 	// The Linux kernel's core ACPI subsystem creates struct acpi_device
+@@ -20,3 +26,22 @@ const (
+ 	// in a subdirectory whose prefix is pfn (page frame number).
+ 	pfnDevPrefix = "/pfn"
+ )
++
++func initRootBusPath() string {
++	pcieDriverReg := regexp.MustCompile(`^[0-9a-f]{10}.pcie$`)
++	rootBusPath := defaultRootBusPath
++	files, err := ioutil.ReadDir("/sys/devices/platform")
++	if err != nil {
++		return rootBusPath
++	}
++	for _, f := range files {
++		if !f.IsDir() {
++			continue
++		}
++		if pcieDriverReg.MatchString(f.Name()) {
++			rootBusPath = fmt.Sprintf("/devices/platform/%s/pci0000:00", f.Name())
++			break
++		}
++	}
++	return rootBusPath
++}
+-- 
+2.14.3 (Apple Git-98)
+

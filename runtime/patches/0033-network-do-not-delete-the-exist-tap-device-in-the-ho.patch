@@ -1,0 +1,80 @@
+From 7ab7ff54efa3925a8d372f7830d31b87f8d01ea8 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 17 Aug 2020 17:39:18 +0800
+Subject: [PATCH 33/50] network: do not delete the exist tap device in the host
+
+reason: If hotplug a exist tap device into Kata VM, kata-runtime
+should not delete this exist tap device, because this tap device
+is controlled by other network components.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/tap_endpoint.go  | 16 +++++++++++++---
+ virtcontainers/veth_endpoint.go |  3 +++
+ 2 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/virtcontainers/tap_endpoint.go b/virtcontainers/tap_endpoint.go
+index c897670e..2cf70dce 100644
+--- a/virtcontainers/tap_endpoint.go
++++ b/virtcontainers/tap_endpoint.go
+@@ -77,7 +77,7 @@ func (endpoint *TapEndpoint) Detach(netNsCreated bool, netNsPath string) error {
+ 
+ 	networkLogger().WithField("endpoint-type", TapEndpointType).Info("Detaching endpoint")
+ 	return doNetNS(netNsPath, func(_ ns.NetNS) error {
+-		return unTapNetwork(endpoint.TapInterface.TAPIface.Name)
++		return unTapNetwork(endpoint)
+ 	})
+ }
+ 
+@@ -91,6 +91,9 @@ func (endpoint *TapEndpoint) HotAttach(h hypervisor) error {
+ 
+ 	if _, err := h.hotplugAddDevice(endpoint, netDev); err != nil {
+ 		networkLogger().WithError(err).Error("Error attach tap ep")
++		if errUnTap := unTapNetwork(endpoint); errUnTap != nil {
++			networkLogger().WithError(errUnTap).Errorf("Error rollback tap %s", endpoint.TapInterface.TAPIface.Name)
++		}
+ 		return err
+ 	}
+ 	return nil
+@@ -100,7 +103,7 @@ func (endpoint *TapEndpoint) HotAttach(h hypervisor) error {
+ func (endpoint *TapEndpoint) HotDetach(h hypervisor, netNsCreated bool, netNsPath string) error {
+ 	networkLogger().Info("Hot detaching tap endpoint")
+ 	if err := doNetNS(netNsPath, func(_ ns.NetNS) error {
+-		return unTapNetwork(endpoint.TapInterface.TAPIface.Name)
++		return unTapNetwork(endpoint)
+ 	}); err != nil {
+ 		networkLogger().WithError(err).Warn("Error un-bridging tap ep")
+ 	}
+@@ -185,7 +188,14 @@ func tapNetwork(endpoint *TapEndpoint, numCPUs uint32, disableVhostNet bool) err
+ 	return nil
+ }
+ 
+-func unTapNetwork(name string) error {
++func unTapNetwork(endpoint *TapEndpoint) error {
++	// length of VMFDs == 0 means that the endpoint is already exist in the host,
++	// no created by kata, so we don't need to remove it when detach
++	if len(endpoint.TapInterface.VMFds) == 0 {
++		return nil
++	}
++
++	name := endpoint.TapInterface.TAPIface.Name
+ 	netHandle, err := netlink.NewHandle()
+ 	if err != nil {
+ 		return err
+diff --git a/virtcontainers/veth_endpoint.go b/virtcontainers/veth_endpoint.go
+index 9ece6a74..0f2ec9ba 100644
+--- a/virtcontainers/veth_endpoint.go
++++ b/virtcontainers/veth_endpoint.go
+@@ -119,6 +119,9 @@ func (endpoint *VethEndpoint) HotAttach(h hypervisor) error {
+ 
+ 	if _, err := h.hotplugAddDevice(endpoint, netDev); err != nil {
+ 		networkLogger().WithError(err).Error("Error attach virtual ep")
++		if errDisconn := xDisconnectVMNetwork(endpoint); errDisconn != nil {
++			networkLogger().WithError(errDisconn).Error("Error rollback virtual ep")
++		}
+ 		return err
+ 	}
+ 	return nil
+-- 
+2.14.3 (Apple Git-98)
+

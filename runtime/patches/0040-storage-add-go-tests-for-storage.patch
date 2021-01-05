@@ -1,0 +1,221 @@
+From 2e32e2c156a134605de42c53ef77366ac73f2614 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 18 Aug 2020 22:01:58 +0800
+Subject: [PATCH 40/50] storage: add go tests for storage
+
+reason: add go tests file storage_test.go and storage_spec_test.go
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/storage/storage_spec_test.go | 151 ++++++++++++++++++++++++++++
+ virtcontainers/storage/storage_test.go      |  40 ++++++++
+ 2 files changed, 191 insertions(+)
+ create mode 100644 virtcontainers/storage/storage_spec_test.go
+ create mode 100644 virtcontainers/storage/storage_test.go
+
+diff --git a/virtcontainers/storage/storage_spec_test.go b/virtcontainers/storage/storage_spec_test.go
+new file mode 100644
+index 00000000..f638245a
+--- /dev/null
++++ b/virtcontainers/storage/storage_spec_test.go
+@@ -0,0 +1,151 @@
++/*
++Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++Description: common functions test
++Author: yangfeiyu
++Create: 2019-07-24
++*/
++
++package storage
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/opencontainers/runtime-spec/specs-go"
++)
++
++func TestValidateStorageValue(t *testing.T) {
++	assert := assert.New(t)
++	//invalid storage type,not NFS or GPATHS
++	spec := &StorageSpec{
++		StorageType: "invalidStorage",
++		Source:      "sfs.com:/remote/path",
++		Destination: "/opt/",
++	}
++	data, err := json.Marshal(spec)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.Error(err, "StorageType is not NFS or GPATHS,it should return error")
++
++	//case 1: NFS
++	specNFS := []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "sfs.com:/remote/path",
++			Destination: "/opt/"},
++	}
++	data, err = json.Marshal(specNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.NoError(err)
++
++	// case2: invalid source domain address
++	specNFS = []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "sfs..com:/remote/path",
++			Destination: "/opt/"},
++	}
++	data, err = json.Marshal(specNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.Error(err)
++
++	// case 3: nfs source is valid ip address
++	ipSpecNFS := []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "192.168.18.147:/remote/path",
++			Destination: "/tmp/sfsturbo0",
++		},
++	}
++
++	data, err = json.Marshal(ipSpecNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.NoError(err)
++
++	// case 4: invalid ip address for nfs source
++	ipSpecNFS = []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "192.168.18.300:/remote/path",
++			Destination: "/tmp/sfsturbo0",
++		},
++	}
++
++	data, err = json.Marshal(ipSpecNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.Error(err)
++
++	// case 5: validate ip address and source remote path is /
++	ipSpecNFS = []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "192.168.18.3:/",
++			Destination: "/tmp/sfsturbo0",
++		},
++	}
++
++	data, err = json.Marshal(ipSpecNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.NoError(err)
++
++	// case 6: invalid ip address 192.168.18.147.11
++	ipSpecNFS = []StorageSpec{
++		{
++			StorageType: NFS,
++			Source:      "192.168.18.147.11:/",
++			Destination: "/tmp/sfsturbo0",
++		},
++	}
++
++	data, err = json.Marshal(ipSpecNFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	assert.Error(err)
++
++	//GPATHS
++	specGPATHFS := []StorageSpec{
++		{
++			StorageType: GPATHFS,
++			Source:      "/remote/path",
++			Destination: "/opt/"},
++	}
++	data, err = json.Marshal(specGPATHFS)
++	assert.NoError(err)
++
++	err = ValidateStorageValue(string(data))
++	if STORAGES[GPATHFS] == true {
++		assert.NoError(err, "StorageType GPATHFS is valid,it should return no error")
++	} else {
++		assert.Error(err, "StorageType GPATHFS is invalid,it should return error")
++	}
++}
++
++func TestGetGrpcStorageAndAppendMount(t *testing.T) {
++	assert := assert.New(t)
++	var spec specs.Spec
++	sandboxId := "7f3b5e32cc7fe757e1b69f7a005ca1971def5011e730c82535783630fe24b318"
++	vmBasePath := "/tmp"
++
++	// storageType nfs with legal source and dest will succeed
++	storageSpec := "[{\"storage_type\":\"nfs\",\"source\":\"sfs.com:/remote/path\",\"dest\":\"/opt/nfs\"}]"
++	grpcStorages := GetGrpcStorageAndAppendMount(vmBasePath,storageSpec,&spec,sandboxId)
++	assert.NotNil(grpcStorages[0])
++
++	// storageType nfs with illegal source and dest will fail
++	storageSpec = "[{\"storage_type\":\"nfs\",\"source\":\"sfs.com\",\"dest\":\"/opt/nfs\"}]"
++	grpcStorages = GetGrpcStorageAndAppendMount(vmBasePath,storageSpec,&spec,sandboxId)
++	assert.Nil(grpcStorages[0])
++}
+diff --git a/virtcontainers/storage/storage_test.go b/virtcontainers/storage/storage_test.go
+new file mode 100644
+index 00000000..c9ca4926
+--- /dev/null
++++ b/virtcontainers/storage/storage_test.go
+@@ -0,0 +1,40 @@
++/*
++Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++Description: common functions test
++Author: yangfeiyu
++Create: 2019-07-24
++*/
++
++package storage
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestValidate(t *testing.T) {
++	//NFS valid
++	assert := assert.New(t)
++	remoteStorage := &RemoteStorage{
++		Source: "sfs.com:/remote/path",
++		Dest:   "/opt/",
++	}
++	err := remoteStorage.Validate(NFS)
++	assert.NoError(err, "NFS url is valid,it should return no error")
++
++	//NFS invalid
++	remoteStorage.Source = "sfs.com/../remote/path"
++	err = remoteStorage.Validate(NFS)
++	assert.Error(err, "NFS url is invalid,it should return error")
++
++	//GPATHS valid
++	remoteStorage.Source = "/path/in/vm"
++	err = remoteStorage.Validate(GPATHFS)
++	assert.NoError(err, "GPATHFS is valid,it should return no error")
++
++	//GPATHS invalid
++	remoteStorage.Source = "./../path/in/../vm"
++	err = remoteStorage.Validate(GPATHFS)
++	assert.Error(err, "GPATHFS is invalid,it should return error")
++}
+-- 
+2.14.3 (Apple Git-98)
+

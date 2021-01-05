@@ -1,0 +1,98 @@
+From fd63d26a5b0542f35d61b0c19c80795f052b4518 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 28 Jul 2020 22:05:44 +0800
+Subject: [PATCH 13/50] kata-runtime: get container info by containerID prefix
+
+reason: get container info by containerID prefix, so we just
+need to input the prefix containerID when call kata-runtime
+subcommand
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/oci.go           | 35 +++++++++++++++++++++++++++++++++++
+ pkg/katautils/oci.go |  5 +++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/cli/oci.go b/cli/oci.go
+index 8ffac2df..bf962d03 100644
+--- a/cli/oci.go
++++ b/cli/oci.go
+@@ -9,6 +9,7 @@ import (
+ 	"bufio"
+ 	"context"
+ 	"fmt"
++	"io/ioutil"
+ 	"net"
+ 	"os"
+ 	"path/filepath"
+@@ -25,6 +26,8 @@ const (
+ 	// Filesystem type corresponding to CGROUP_SUPER_MAGIC as listed
+ 	// here: http://man7.org/linux/man-pages/man2/statfs.2.html
+ 	cgroupFsType = 0x27e0eb
++
++	maxIDLength = 64
+ )
+ 
+ var cgroupsDirPath string
+@@ -38,6 +41,14 @@ func getContainerInfo(ctx context.Context, containerID string) (vc.ContainerStat
+ 		return vc.ContainerStatus{}, "", fmt.Errorf("Missing container ID")
+ 	}
+ 
++	if len(containerID) < maxIDLength {
++		fullContainerID, err := getContainerIDbyPrefix(containerID)
++		if err != nil {
++			return vc.ContainerStatus{}, "", err
++		}
++		containerID = fullContainerID
++	}
++
+ 	sandboxID, err := katautils.FetchContainerIDMapping(containerID)
+ 	if err != nil {
+ 		return vc.ContainerStatus{}, "", err
+@@ -211,3 +222,27 @@ func getCgroupsDirPath(mountInfoFile string) (string, error) {
+ 
+ 	return cgroupRootPath, nil
+ }
++
++func getContainerIDbyPrefix(prefix string) (string, error) {
++	files, err := ioutil.ReadDir(katautils.GetCtrsMapTreePath())
++	if err != nil {
++		return "", err
++	}
++
++	containers := []string{}
++	for _, file := range files {
++		if file.IsDir() && strings.HasPrefix(file.Name(), prefix) {
++			containers = append(containers, file.Name())
++		}
++	}
++
++	if len(containers) == 0 {
++		return "", fmt.Errorf("no such container ID (%v)", prefix)
++	}
++
++	if len(containers) > 1 {
++		return "", fmt.Errorf("multiple containers found (%v)", prefix)
++	}
++
++	return containers[0], nil
++}
+diff --git a/pkg/katautils/oci.go b/pkg/katautils/oci.go
+index 6de8101e..1334af35 100644
+--- a/pkg/katautils/oci.go
++++ b/pkg/katautils/oci.go
+@@ -25,6 +25,11 @@ func SetCtrsMapTreePath(path string) {
+ 	ctrsMapTreePath = path
+ }
+ 
++// GetCtrsMapTreePath return the containerID to SandboxID mapping dir
++func GetCtrsMapTreePath() string {
++	return ctrsMapTreePath
++}
++
+ // doUpdatePath returns whether a ctrsMapTreePath needs to be updated with a rootless prefix
+ func doUpdatePath() bool {
+ 	return rootless.IsRootless() && !strings.HasPrefix(ctrsMapTreePath, rootless.GetRootlessDir())
+-- 
+2.14.3 (Apple Git-98)
+

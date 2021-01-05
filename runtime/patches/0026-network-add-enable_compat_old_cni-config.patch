@@ -1,0 +1,285 @@
+From eeca1e47e9a6422d89d08275864f2c1b15e54941 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Fri, 14 Aug 2020 19:14:35 +0800
+Subject: [PATCH 26/50] network: add enable_compat_old_cni config
+
+reason: old version kata-network list-ifaces output result different
+from the community version, inorder to compatible with the old version
+list-ifaces command output format, add enable_compat_old_cni to control
+the list-ifaces command output format.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/config/configuration-qemu.toml.in |  4 ++++
+ cli/network.go                        | 17 +++++++++++++++--
+ cli/network_test.go                   |  6 ++++++
+ pkg/katautils/config.go               |  2 ++
+ virtcontainers/api.go                 | 10 +++++++---
+ virtcontainers/interfaces.go          |  1 +
+ virtcontainers/network.go             | 11 ++++++-----
+ virtcontainers/persist.go             | 18 ++++++++++--------
+ virtcontainers/persist/api/config.go  |  9 +++++----
+ virtcontainers/pkg/oci/utils.go       |  4 ++++
+ virtcontainers/pkg/vcmock/sandbox.go  |  5 +++++
+ virtcontainers/sandbox.go             |  5 +++++
+ 12 files changed, 70 insertions(+), 22 deletions(-)
+
+diff --git a/cli/config/configuration-qemu.toml.in b/cli/config/configuration-qemu.toml.in
+index b44e84d8..46f8b632 100644
+--- a/cli/config/configuration-qemu.toml.in
++++ b/cli/config/configuration-qemu.toml.in
+@@ -453,6 +453,10 @@ disable_guest_seccomp=@DEFDISABLEGUESTSECCOMP@
+ # (default: false)
+ #disable_new_netns = true
+ 
++# If enabled, the kata-network will return the old interface format info to be compatible with
++# old version CNI plugin
++enable_compat_old_cni = true
++
+ # if enabled, the runtime will add all the kata processes inside one dedicated cgroup.
+ # The container cgroups in the host are not created, just one single cgroup per sandbox.
+ # The runtime caller is free to restrict or collect cgroup stats of the overall Kata sandbox.
+diff --git a/cli/network.go b/cli/network.go
+index 66955725..a1a24425 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -251,8 +251,21 @@ func networkListCommand(ctx context.Context, containerID string, opType networkT
+ 			kataLog.WithField("existing-interfaces", fmt.Sprintf("%+v", interfaces)).
+ 				WithError(err).Error("list interfaces failed")
+ 		}
+-		compatInfs := convertCompatInterfaces(interfaces)
+-		json.NewEncoder(file).Encode(compatInfs)
++
++		sandbox, err := vci.FetchSandbox(ctx, sandboxID)
++		if err != nil {
++			kataLog.WithField("existing-interfaces", fmt.Sprintf("%+v", interfaces)).
++				WithError(err).Error("fetch sandbox failed")
++		}
++
++		// If sandbox network config need to be compatible with old CNI,
++		// convert the interface format to old version format.
++		if sandbox.IsCompatOldCNI() {
++			compatInfs := convertCompatInterfaces(interfaces)
++			json.NewEncoder(file).Encode(compatInfs)
++		} else {
++			json.NewEncoder(file).Encode(interfaces)
++		}
+ 	case routeType:
+ 		var routes []*vcTypes.Route
+ 		routes, err = vci.ListRoutes(ctx, sandboxID)
+diff --git a/cli/network_test.go b/cli/network_test.go
+index 4e3d943d..95fd2749 100644
+--- a/cli/network_test.go
++++ b/cli/network_test.go
+@@ -17,6 +17,7 @@ import (
+ 
+ 	vc "github.com/kata-containers/runtime/virtcontainers"
+ 	vcTypes "github.com/kata-containers/runtime/virtcontainers/pkg/types"
++	"github.com/kata-containers/runtime/virtcontainers/pkg/vcmock"
+ 	"github.com/kata-containers/runtime/virtcontainers/types"
+ )
+ 
+@@ -59,6 +60,10 @@ func TestNetworkCliFunction(t *testing.T) {
+ 		return newSingleContainerStatus(testContainerID, state, map[string]string{}, &specs.Spec{}), nil
+ 	}
+ 
++	testingImpl.FetchSandboxFunc = func(ctx context.Context, id string) (vc.VCSandbox, error) {
++		return &vcmock.Sandbox{}, nil
++	}
++
+ 	defer func() {
+ 		testingImpl.AddInterfaceFunc = nil
+ 		testingImpl.RemoveInterfaceFunc = nil
+@@ -66,6 +71,7 @@ func TestNetworkCliFunction(t *testing.T) {
+ 		testingImpl.UpdateRoutesFunc = nil
+ 		testingImpl.ListRoutesFunc = nil
+ 		testingImpl.StatusContainerFunc = nil
++		testingImpl.FetchSandboxFunc = nil
+ 	}()
+ 
+ 	set := flag.NewFlagSet("", 0)
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index 9a99b9d4..94c916a0 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -141,6 +141,7 @@ type runtime struct {
+ 	Debug               bool     `toml:"enable_debug"`
+ 	Tracing             bool     `toml:"enable_tracing"`
+ 	DisableNewNetNs     bool     `toml:"disable_new_netns"`
++	EnableCompatOldCNI  bool     `toml:"enable_compat_old_cni"`
+ 	DisableGuestSeccomp bool     `toml:"disable_guest_seccomp"`
+ 	SandboxCgroupOnly   bool     `toml:"sandbox_cgroup_only"`
+ 	Experimental        []string `toml:"experimental"`
+@@ -1235,6 +1236,7 @@ func LoadConfiguration(configPath string, ignoreLogging, builtIn bool, debugFlag
+ 
+ 	config.SandboxCgroupOnly = tomlConf.Runtime.SandboxCgroupOnly
+ 	config.DisableNewNetNs = tomlConf.Runtime.DisableNewNetNs
++	config.EnableCompatOldCNI = tomlConf.Runtime.EnableCompatOldCNI
+ 	for _, f := range tomlConf.Runtime.Experimental {
+ 		feature := exp.Get(f)
+ 		if feature == nil {
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index eb5b4995..fb044fe1 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -949,9 +949,13 @@ func ListInterfaces(ctx context.Context, sandboxID string) ([]*vcTypes.Interface
+ 	}
+ 	defer s.releaseStatelessSandbox()
+ 
+-	// get interfaces info from persist.json file
+-	// instead of by s.ListInterfaces()
+-	return convertToCompatInterfaces(&s.networkNS.Endpoints), nil
++	// If enable_compat_old_cni is enabled, get interfaces info from
++	// persist.json file instead of by s.ListInterfaces()
++	if s.config.NetworkConfig.EnableCompatOldCNI {
++		return convertToCompatInterfaces(&s.networkNS.Endpoints), nil
++	}
++
++	return s.ListInterfaces()
+ }
+ 
+ // UpdateRoutes is the virtcontainers update routes entry point.
+diff --git a/virtcontainers/interfaces.go b/virtcontainers/interfaces.go
+index fa6b584e..499b386e 100644
+--- a/virtcontainers/interfaces.go
++++ b/virtcontainers/interfaces.go
+@@ -98,6 +98,7 @@ type VCSandbox interface {
+ 	ListInterfaces() ([]*vcTypes.Interface, error)
+ 	UpdateRoutes(routes []*vcTypes.Route) ([]*vcTypes.Route, error)
+ 	ListRoutes() ([]*vcTypes.Route, error)
++	IsCompatOldCNI() bool
+ }
+ 
+ // VCContainer is the Container interface
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index bf7f9336..db235cf6 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -155,11 +155,12 @@ type NetworkInterfacePair struct {
+ 
+ // NetworkConfig is the network configuration related to a network.
+ type NetworkConfig struct {
+-	NetNSPath         string
+-	NetNsCreated      bool
+-	DisableNewNetNs   bool
+-	NetmonConfig      NetmonConfig
+-	InterworkingModel NetInterworkingModel
++	NetNSPath          string
++	NetNsCreated       bool
++	DisableNewNetNs    bool
++	EnableCompatOldCNI bool
++	NetmonConfig       NetmonConfig
++	InterworkingModel  NetInterworkingModel
+ }
+ 
+ func networkLogger() *logrus.Entry {
+diff --git a/virtcontainers/persist.go b/virtcontainers/persist.go
+index 6bd09a0b..fe00bf9a 100644
+--- a/virtcontainers/persist.go
++++ b/virtcontainers/persist.go
+@@ -187,10 +187,11 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 		},
+ 		ShimType: string(sconfig.ShimType),
+ 		NetworkConfig: persistapi.NetworkConfig{
+-			NetNSPath:         sconfig.NetworkConfig.NetNSPath,
+-			NetNsCreated:      sconfig.NetworkConfig.NetNsCreated,
+-			DisableNewNetNs:   sconfig.NetworkConfig.DisableNewNetNs,
+-			InterworkingModel: int(sconfig.NetworkConfig.InterworkingModel),
++			NetNSPath:          sconfig.NetworkConfig.NetNSPath,
++			NetNsCreated:       sconfig.NetworkConfig.NetNsCreated,
++			DisableNewNetNs:    sconfig.NetworkConfig.DisableNewNetNs,
++			EnableCompatOldCNI: sconfig.NetworkConfig.EnableCompatOldCNI,
++			InterworkingModel:  int(sconfig.NetworkConfig.InterworkingModel),
+ 		},
+ 
+ 		ShmSize:             sconfig.ShmSize,
+@@ -477,10 +478,11 @@ func loadSandboxConfig(id string) (*SandboxConfig, error) {
+ 		},
+ 		ShimType: ShimType(savedConf.ShimType),
+ 		NetworkConfig: NetworkConfig{
+-			NetNSPath:         savedConf.NetworkConfig.NetNSPath,
+-			NetNsCreated:      savedConf.NetworkConfig.NetNsCreated,
+-			DisableNewNetNs:   savedConf.NetworkConfig.DisableNewNetNs,
+-			InterworkingModel: NetInterworkingModel(savedConf.NetworkConfig.InterworkingModel),
++			NetNSPath:          savedConf.NetworkConfig.NetNSPath,
++			NetNsCreated:       savedConf.NetworkConfig.NetNsCreated,
++			DisableNewNetNs:    savedConf.NetworkConfig.DisableNewNetNs,
++			EnableCompatOldCNI: savedConf.NetworkConfig.EnableCompatOldCNI,
++			InterworkingModel:  NetInterworkingModel(savedConf.NetworkConfig.InterworkingModel),
+ 		},
+ 
+ 		ShmSize:             savedConf.ShmSize,
+diff --git a/virtcontainers/persist/api/config.go b/virtcontainers/persist/api/config.go
+index cfbee849..3a2df32b 100644
+--- a/virtcontainers/persist/api/config.go
++++ b/virtcontainers/persist/api/config.go
+@@ -210,10 +210,11 @@ type ShimConfig struct {
+ 
+ // NetworkConfig is the network configuration related to a network.
+ type NetworkConfig struct {
+-	NetNSPath         string
+-	NetNsCreated      bool
+-	DisableNewNetNs   bool
+-	InterworkingModel int
++	NetNSPath          string
++	NetNsCreated       bool
++	DisableNewNetNs    bool
++	EnableCompatOldCNI bool
++	InterworkingModel  int
+ }
+ 
+ type ContainerConfig struct {
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index 36c730b7..948bd3cb 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -130,6 +130,9 @@ type RuntimeConfig struct {
+ 	//Determines if create a netns for hypervisor process
+ 	DisableNewNetNs bool
+ 
++	// Determines if compatible with old CNI plugin
++	EnableCompatOldCNI bool
++
+ 	//Determines kata processes are managed only in sandbox cgroup
+ 	SandboxCgroupOnly bool
+ 
+@@ -275,6 +278,7 @@ func networkConfig(ocispec specs.Spec, config RuntimeConfig) (vc.NetworkConfig,
+ 	}
+ 	netConf.InterworkingModel = config.InterNetworkModel
+ 	netConf.DisableNewNetNs = config.DisableNewNetNs
++	netConf.EnableCompatOldCNI = config.EnableCompatOldCNI
+ 
+ 	netConf.NetmonConfig = vc.NetmonConfig{
+ 		Path:   config.NetmonConfig.Path,
+diff --git a/virtcontainers/pkg/vcmock/sandbox.go b/virtcontainers/pkg/vcmock/sandbox.go
+index 677457ef..11b83ccd 100644
+--- a/virtcontainers/pkg/vcmock/sandbox.go
++++ b/virtcontainers/pkg/vcmock/sandbox.go
+@@ -212,3 +212,8 @@ func (s *Sandbox) UpdateRoutes(routes []*vcTypes.Route) ([]*vcTypes.Route, error
+ func (s *Sandbox) ListRoutes() ([]*vcTypes.Route, error) {
+ 	return nil, nil
+ }
++
++// IsCompatOldCNI return the whether enable compatible with old CNI
++func (s *Sandbox) IsCompatOldCNI() bool {
++	return false
++}
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index c8981a41..6a643a12 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -2379,6 +2379,11 @@ func (s *Sandbox) setContainersState(state types.StateString) error {
+ 	return nil
+ }
+ 
++// IsCompatOldCNI return the whether enable compatible with old CNI
++func (s *Sandbox) IsCompatOldCNI() bool {
++	return s.config.NetworkConfig.EnableCompatOldCNI
++}
++
+ // updateStaticSandboxResources update sandbox's cpu and memory resource passed by
+ // sandbox_cpu and sandbox_mem annotations
+ func updateStaticSandboxResources(sandboxConfig *SandboxConfig) error {
+-- 
+2.14.3 (Apple Git-98)
+

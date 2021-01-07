@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 7
+%define RELEASE 8
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -90,6 +90,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Thu Jan 7 2021 LiangZhang<zhangliang5@huawei.com> - 1.11.1-8
+- Type:feature
+- ID:NA
+- SUG:NA
+- DESC:add suport for stratovirt of kata-check cli
+
 * Tue Dec 22 2020 jiangpengfei<jiangpengfei9@huawei.com> - 1.11.1-7
 - Type:enhancement
 - ID:NA

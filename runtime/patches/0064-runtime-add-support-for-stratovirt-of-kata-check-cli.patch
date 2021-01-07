@@ -1,0 +1,38 @@
+From 5af764ee8aad86f57df64ad78b44611c47067cc9 Mon Sep 17 00:00:00 2001
+From: LiangZhang <zhangliang5@huawei.com>
+Date: Tue, 15 Dec 2020 10:14:10 +0800
+Subject: [PATCH] runtime: add support for stratovirt of kata-check cli
+
+reason: The current version of kata-check lacks support of stratovirt
+
+Signed-off-by: LiangZhang <zhangliang5@huawei.com>
+---
+ cli/kata-check_amd64.go | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/cli/kata-check_amd64.go b/cli/kata-check_amd64.go
+index 8376293..ae62746 100644
+--- a/cli/kata-check_amd64.go
++++ b/cli/kata-check_amd64.go
+@@ -107,7 +107,7 @@ func setCPUtype(hypervisorType vc.HypervisorType) error {
+ 			fallthrough
+ 		case "clh":
+ 			fallthrough
+-		case "qemu":
++		case "qemu", "stratovirt":
+ 			archRequiredCPUFlags = map[string]string{
+ 				cpuFlagVMX:    "Virtualization support",
+ 				cpuFlagLM:     "64Bit CPU",
+@@ -286,6 +286,8 @@ func archHostCanCreateVMContainer(hypervisorType vc.HypervisorType) error {
+ 	switch hypervisorType {
+ 	case "qemu":
+ 		fallthrough
++	case "stratovirt":
++		fallthrough
+ 	case "clh":
+ 		fallthrough
+ 	case "firecracker":
+-- 
+2.25.1
+
+

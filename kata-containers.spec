@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 8
+%define RELEASE 9
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -90,6 +90,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Fri Jan 8 2021 LiangZhang<zhangliang5@huawei.com> - 1.11.1-9
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fixup that the getPids functions returns pid
+
 * Thu Jan 7 2021 LiangZhang<zhangliang5@huawei.com> - 1.11.1-8
 - Type:feature
 - ID:NA
@@ -126,7 +132,7 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 - SUG:NA
 - DESC:fix cmd params of direct use stratovirt binary
 
-* Thu Sep 20 2020 jiangpengf<jiangpengfei9@huawei.com> - 1.11.1-2
+* Sun Sep 20 2020 jiangpengf<jiangpengfei9@huawei.com> - 1.11.1-2
 - Type:bugfix
 - ID:NA
 - SUG:NA

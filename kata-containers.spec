@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 7
+%define RELEASE 8
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -90,6 +90,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Tue Feb 23 2021 xinghe <xinghe1@huawei.com> - 1.11.1-8
+- Type:CVE
+- ID:NA
+- SUG:NA
+- DESC:fix CVE-2020-28914
+
 * Tue Dec 22 2020 jiangpengfei<jiangpengfei9@huawei.com> - 1.11.1-7
 - Type:enhancement
 - ID:NA

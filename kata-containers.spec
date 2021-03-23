@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 12
+%define RELEASE 13
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -91,6 +91,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Tue Mar 23 2021 jikui <jikui2@huawei.com> - 1.11.1-13
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:remove ctty to resolve build failed
+
 * Mon Mar 22 2021 jikui <jikui2@huawei.com> - 1.11.1-12
 - Type:enhancement
 - ID:NA

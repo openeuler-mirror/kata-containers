@@ -1,0 +1,48 @@
+From 22678612f668274ab0b37175517401039e17ff00 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Mon, 22 Mar 2021 17:18:14 +0800
+Subject: [PATCH] kata-runtime: add linkmode to resolve build error
+
+reason: add linkmode to resolve build error
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ Makefile | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 6b9f764..f7a9311 100644
+--- a/Makefile
++++ b/Makefile
+@@ -490,8 +490,9 @@ endif
+ BUILDFLAGS := -buildmode=pie ${BUILDTAGS}
+ 
+ # whether stipping the binary
++STRIP=yes
+ ifeq ($(STRIP),yes)
+-       KATA_LDFLAGS := -ldflags "-w -s"
++	KATA_LDFLAGS := -ldflags "-w -s"
+ endif
+ 
+ # Return non-empty string if specified directory exists
+@@ -525,7 +526,7 @@ $(NETMON_TARGET_OUTPUT): $(SOURCES) VERSION
+ 	CGO_CFLAGS="-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O2" \
+ 	CGO_LDFLAGS_ALLOW="-Wl,-z,relro,-z,now" \
+ 	CGO_LDFLAGS="-Wl,-z,relro,-z,now -Wl,-z,noexecstack" \
+-	go build $(BUILDFLAGS) -o $@ -ldflags "-X main.version=$(VERSION)" $(KATA_LDFLAGS))
++	go build $(BUILDFLAGS) -o $@ -ldflags "-linkmode=external -X main.version=$(VERSION) -w -s")
+ 
+ runtime: $(TARGET_OUTPUT) $(CONFIGS)
+ .DEFAULT: default
+@@ -567,7 +568,7 @@ $(TARGET_OUTPUT): $(SOURCES) $(GENERATED_FILES) $(MAKEFILE_LIST) | show-summary
+ 	CGO_CFLAGS="-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O2" \
+ 	CGO_LDFLAGS_ALLOW="-Wl,-z,relro,-z,now" \
+ 	CGO_LDFLAGS="-Wl,-z,relro,-z,now -Wl,-z,noexecstack" \
+-	go build $(KATA_LDFLAGS) $(BUILDFLAGS) -o $@ .)
++	go build $(KATA_LDFLAGS) $(BUILDFLAGS) -o $@ -ldflags "-linkmode=external" .)
+ 
+ $(SHIMV2_OUTPUT): $(SOURCES) $(GENERATED_FILES) $(MAKEFILE_LIST)
+ 	$(QUIET_BUILD)(cd $(SHIMV2_DIR)/ && go build $(KATA_LDFLAGS) -i -o $@ .)
+-- 
+2.25.1
+

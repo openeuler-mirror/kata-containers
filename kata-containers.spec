@@ -2,13 +2,13 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 8
+%define RELEASE 9
 
 Name:           kata-containers
 Version:        %{VERSION}
 Release:        %{RELEASE}
 Summary:        Kata Container, the speed of containers, the security of VMs
-License:        Apache 2.0
+License:        Apache-2.0
 URL:            https://github.com/kata-containers
 Source0:        kata_integration-v1.0.0.tar.gz
 Source1:        kata-containers-%{version}.tar.gz
@@ -70,6 +70,7 @@ install -p -m 755 -D %{_builddir}/kernel/linux/arch/arm64/boot/Image %{buildroot
 
 cd %{_builddir}/kata_integration
 mkdir -p -m 750  %{buildroot}/usr/bin
+strip ./build/kata-runtime ./build/kata-proxy ./build/kata-shim ./build/kata-netmon
 install -p -m 750 ./build/kata-runtime ./build/kata-proxy ./build/kata-shim ./build/kata-netmon %{buildroot}/usr/bin/
 install -p -m 640 ./build/kata-containers-initrd.img %{buildroot}/var/lib/kata/
 mkdir -p -m 750 %{buildroot}/usr/share/defaults/kata-containers/
@@ -90,6 +91,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Thu Apr 8 2021 jiangpengfei <jiangpengfei9@huawei.com> - 1.11.1-9
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix kata-containers build failed with golang 1.15.7 version
+
 * Tue Feb 23 2021 xinghe <xinghe1@huawei.com> - 1.11.1-8
 - Type:CVE
 - ID:NA

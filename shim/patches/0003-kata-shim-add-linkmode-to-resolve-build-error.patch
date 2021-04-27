@@ -1,0 +1,37 @@
+From 68290317bc35b3420506f0e25d7fccbdb9f88f5f Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Mon, 22 Mar 2021 17:21:10 +0800
+Subject: [PATCH] kata-shim: add linkmode to resolve build error
+
+reason: add linkmode to resolve build error
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index b244053..70d4a8d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -5,7 +5,7 @@
+ #
+ 
+ # Set to "yes“ if binary stripping is needed.
+-STRIP := no
++STRIP := yes
+ 
+ DESTDIR :=
+ ifeq ($(PREFIX),)
+@@ -36,7 +36,7 @@ $(TARGET): $(SOURCES) $(VERSION_FILE)
+ 	CGO_CFLAGS="-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O2" \
+ 	CGO_LDFLAGS_ALLOW="-Wl,-z,relro,-z,now" \
+ 	CGO_LDFLAGS="-Wl,-z,relro,-z,now -Wl,-z,noexecstack" \
+-	go build $(BUILDFLAGS) -o $@ -ldflags "-X main.version=$(VERSION_COMMIT) $(KATA_LDFLAGS)"
++	go build $(BUILDFLAGS) -o $@ -ldflags "-linkmode=external -X main.version=$(VERSION_COMMIT) $(KATA_LDFLAGS)"
+ 
+ test:
+ 	@echo "Go tests using faketty"
+-- 
+2.25.1
+

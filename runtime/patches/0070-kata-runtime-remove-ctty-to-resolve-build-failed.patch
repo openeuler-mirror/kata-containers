@@ -1,0 +1,29 @@
+From 6d684a77e027e8103345cab768860533705d5ce4 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Tue, 23 Mar 2021 17:17:00 +0800
+Subject: [PATCH] kata-runtime: remove ctty to resolve build failed
+
+reason: remove ctty to resolve build failed
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ virtcontainers/shim.go | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/virtcontainers/shim.go b/virtcontainers/shim.go
+index b192b25..08097f0 100644
+--- a/virtcontainers/shim.go
++++ b/virtcontainers/shim.go
+@@ -219,9 +219,6 @@ func startShim(args []string, params ShimParams) (int, error) {
+ 		cmd.Stderr = f
+ 		// Create Session
+ 		cmd.SysProcAttr.Setsid = true
+-		// Set Controlling terminal to Ctty
+-		cmd.SysProcAttr.Setctty = true
+-		cmd.SysProcAttr.Ctty = int(f.Fd())
+ 	}
+ 	defer func() {
+ 		if f != nil {
+-- 
+2.25.1
+

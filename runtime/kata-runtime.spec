@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 11
+%define RELEASE 12
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -87,6 +87,7 @@ cd %{_builddir}/%{name}-%{version}
 mkdir -p -m 750  %{buildroot}/usr/bin
 install -p -m 750 ./kata-runtime %{buildroot}/usr/bin
 install -p -m 750 ./kata-netmon %{buildroot}/usr/bin
+install -p -m 750 ./containerd-shim-kata-v2 %{buildroot}/usr/bin
 mkdir -p -m 750 %{buildroot}/usr/share/defaults/kata-containers
 install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
 
@@ -95,9 +96,16 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 %files
 /usr/bin/kata-runtime
 /usr/bin/kata-netmon
+/usr/bin/containerd-shim-kata-v2
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Wed Apr 28 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-12
+- Type:feature
+- ID:NA
+- SUG:NA
+- DESC:support kata shimv2 used by iSulad and containerd
+
 * Tue Nov 17 2020 yangfeiyu<yangfeiyu20102011@163.com> - 1.11.1-11
 - Type:bugfix
 - ID:NA

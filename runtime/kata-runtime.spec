@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 12
+%define RELEASE 13
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -100,6 +100,12 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Wed May 12 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-13
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:shimv2 write exit code in integer byte order
+
 * Wed Apr 28 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-12
 - Type:feature
 - ID:NA

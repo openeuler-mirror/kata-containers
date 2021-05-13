@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 14
+%define RELEASE 15
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -92,6 +92,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Wed May 12 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-15
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:shimv2 write exit code in integer byte order
+
 * Wed Apr 28 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-14
 - Type:feature
 - ID:NA

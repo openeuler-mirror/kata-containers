@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 13
+%define RELEASE 14
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -100,6 +100,12 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Thu June 3 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-14
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:put timeout to client of wait rpc to support shimv2
+
 * Wed May 12 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-13
 - Type:bugfix
 - ID:NA

@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 16
+%define RELEASE 17
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -92,6 +92,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Wed June 16 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-17
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:move timeout of waitProcess to stop process
+
 * Thu June 3 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-16
 - Type:bugfix
 - ID:NA

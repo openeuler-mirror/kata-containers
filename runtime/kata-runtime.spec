@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 14
+%define RELEASE 15
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -100,6 +100,12 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Wed June 16 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-15
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC: move timeout of waitProcess to stop process
+
 * Thu June 3 2021 gaohuatao<gaohuatao@huawei.com> - 1.11.1-14
 - Type:bugfix
 - ID:NA

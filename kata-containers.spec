@@ -1,8 +1,8 @@
 #needsrootforbuild
 %global debug_package %{nil}
 
-%define VERSION v1.11.1
-%define RELEASE 10
+%define VERSION 2.1.0
+%define RELEASE 1
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -16,7 +16,7 @@ Source2:        kernel.tar.gz
 
 BuildRoot:      %_topdir/BUILDROOT
 BuildRequires:  automake golang gcc bc glibc-devel glibc-static busybox glib2-devel glib2 ipvsadm conntrack-tools nfs-utils
-BuildRequires:  patch elfutils-libelf-devel openssl-devel bison flex
+BuildRequires:  patch elfutils-libelf-devel openssl-devel bison flex rust cargo rust-packaging libgcc dtc-devel
 
 %description
 This is core component of Kata Container, to make it work, you need a isulad/docker engine.
@@ -30,14 +30,6 @@ This is core component of Kata Container, to make it work, you need a isulad/doc
 cd %{_builddir}/kata_integration
 # apply kata_integration patches
 sh apply-patches
-
-# mv build components into kata_integration dir
-pushd %{_builddir}/kata_integration
-mv ../kata-containers-%{version}/runtime .
-mv ../kata-containers-%{version}/agent .
-mv ../kata-containers-%{version}/proxy .
-mv ../kata-containers-%{version}/shim .
-popd
 
 # build kernel
 cd %{_builddir}/kernel
@@ -53,11 +45,31 @@ cp %{_builddir}/kata_integration/hack/config-kata-arm64 ./.config
 cd %{_builddir}/kernel/linux/
 make %{?_smp_mflags}
 
+mv %{_builddir}/kata-containers-%{version} %{_builddir}/kata-containers
+cd %{_builddir}/kata-containers/
+sh -x apply-patches
+cd %{_builddir}/kata-containers/src/runtime
+make clean
+make
+
+cd %{_builddir}/kata-containers/src/agent
+mkdir vendor && tar -xzf %{_builddir}/kata-containers/vendor.tar.gz -C vendor/
+cp -f ./vendor/version.rs ./src/
+cat > .cargo/config << EOF
+[build]
+rustflags = ["-Clink-arg=-s","-Clink-arg=-lgcc","-Clink-arg=-lfdt"]
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+EOF
+/usr/bin/env CARGO_HOME=.cargo RUSTC_BOOTSTRAP=1 cargo build
 cd %{_builddir}/kata_integration
 mkdir -p -m 750 build
-make runtime
-make proxy
-make shim
+cp %{_builddir}/kata-containers/src/agent/target/debug/kata-agent ./build/
+strip ./build/kata-agent
 make initrd
 
 %install
@@ -70,26 +82,37 @@ install -p -m 755 -D %{_builddir}/kernel/linux/arch/arm64/boot/Image %{buildroot
 
 cd %{_builddir}/kata_integration
 mkdir -p -m 750  %{buildroot}/usr/bin
-install -p -m 750 ./build/kata-runtime ./build/kata-proxy ./build/kata-shim ./build/kata-netmon %{buildroot}/usr/bin/
+install -p -m 750 %{_builddir}/kata-containers/src/runtime/kata-runtime %{buildroot}/usr/bin/
+install -p -m 750 %{_builddir}/kata-containers/src/runtime/kata-netmon %{buildroot}/usr/bin/
+install -p -m 750 %{_builddir}/kata-containers/src/runtime/kata-monitor %{buildroot}/usr/bin/
+install -p -m 750 %{_builddir}/kata-containers/src/runtime/containerd-shim-kata-v2 %{buildroot}/usr/bin/
+install -p -m 640 -D %{_builddir}/kata-containers/src/runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
 install -p -m 640 ./build/kata-containers-initrd.img %{buildroot}/var/lib/kata/
 mkdir -p -m 750 %{buildroot}/usr/share/defaults/kata-containers/
-install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
+install -p -m 640 -D %{_builddir}/kata-containers/src/runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
+strip %{buildroot}/usr/bin/kata*
+strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 
 %clean
 
 %files
 /usr/bin/kata-runtime
-/usr/bin/kata-proxy
-/usr/bin/kata-shim
 /usr/bin/kata-netmon
+/usr/bin/kata-monitor
+/usr/bin/containerd-shim-kata-v2
 /var/lib/kata/kernel
 /var/lib/kata/kata-containers-initrd.img
 %config(noreplace) /usr/share/defaults/kata-containers/configuration.toml
 
 %doc
 
-
 %changelog
+* Wed Aug 18 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-1
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:upgrade kata-containers
+
 * Fri Feb 19 2021 xinghe <xinghe1@huawei.com> - 1.11.1-10
 - Type:CVE
 - ID:NA

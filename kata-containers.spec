@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 1
+%define RELEASE 2
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -87,9 +87,9 @@ install -p -m 750 %{_builddir}/kata-containers/src/runtime/kata-netmon %{buildro
 install -p -m 750 %{_builddir}/kata-containers/src/runtime/kata-monitor %{buildroot}/usr/bin/
 install -p -m 750 %{_builddir}/kata-containers/src/runtime/containerd-shim-kata-v2 %{buildroot}/usr/bin/
 install -p -m 640 -D %{_builddir}/kata-containers/src/runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
+install -p -m 640 -D %{_builddir}/kata-containers/src/runtime/cli/config/configuration-stratovirt.toml %{buildroot}/usr/share/defaults/kata-containers/configuration-stratovirt.toml
 install -p -m 640 ./build/kata-containers-initrd.img %{buildroot}/var/lib/kata/
 mkdir -p -m 750 %{buildroot}/usr/share/defaults/kata-containers/
-install -p -m 640 -D %{_builddir}/kata-containers/src/runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
 strip %{buildroot}/usr/bin/kata*
 strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 
@@ -107,6 +107,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Wed Aug 20 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-2
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:support with stratovirt and isulad
+
 * Wed Aug 18 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-1
 - Type:enhancement
 - ID:NA

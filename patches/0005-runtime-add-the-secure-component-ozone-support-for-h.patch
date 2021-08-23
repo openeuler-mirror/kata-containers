@@ -1,0 +1,655 @@
+From 45c8e108497eb93d69afd38e6281b837e65cf3ec Mon Sep 17 00:00:00 2001
+From: Wei Gao <gaowei66@huawei.com>
+Date: Mon, 9 Aug 2021 14:55:41 +0800
+Subject: [PATCH 5/6] runtime: add the secure component "ozone" support for
+ hypervisor type stratovirt.
+
+Signed-off-by: Wei Gao <gaowei66@huawei.com>
+---
+ src/runtime/Makefile                          |   4 +
+ src/runtime/arch/amd64-options.mk             |   4 +-
+ src/runtime/arch/arm64-options.mk             |   4 +-
+ .../config/configuration-stratovirt.toml.in   |  10 +
+ .../pkg/katautils/config-settings.go.in       |   1 +
+ src/runtime/pkg/katautils/config.go           |  18 +
+ src/runtime/virtcontainers/hypervisor.go      |   3 +
+ src/runtime/virtcontainers/persist.go         |   1 +
+ .../virtcontainers/persist/api/config.go      |   3 +
+ src/runtime/virtcontainers/stratovirt.go      | 309 ++++++++++++++----
+ 10 files changed, 292 insertions(+), 65 deletions(-)
+
+diff --git a/src/runtime/Makefile b/src/runtime/Makefile
+index ea2cd296..745bcc10 100644
+--- a/src/runtime/Makefile
++++ b/src/runtime/Makefile
+@@ -146,6 +146,8 @@ ACRNVALIDCTLPATHS := [\"$(ACRNCTLPATH)\"]
+ 
+ STRATOVIRTPATH = $(STRATOVIRTBINDIR)/$(STRATOVIRTCMD)
+ STRATOVIRTVALIDHYPERVISORPATHS := [\"$(STRATOVIRTPATH)\"]
++STRATOVIRTOZONEPATH = $(STRATOVIRTBINDIR)/$(STRATOVIRTOZONECMD)
++STRATOVIRTVALIDOZONEPATHS = [\"$(STRATOVIRTOZONEPATH)\"]
+ 
+ NETMONCMD := $(BIN_PREFIX)-netmon
+ NETMONPATH := $(PKGLIBEXECDIR)/$(NETMONCMD)
+@@ -414,6 +416,8 @@ USER_VARS += FCJAILERPATH
+ USER_VARS += FCVALIDJAILERPATHS
+ USER_VARS += STRATOVIRTPATH
+ USER_VARS += STRATOVIRTVALIDHYPERVISORPATHS
++USER_VARS += STRATOVIRTOZONEPATH
++USER_VARS += STRATOVIRTVALIDOZONEPATHS
+ USER_VARS += SYSCONFIG
+ USER_VARS += IMAGENAME
+ USER_VARS += IMAGEPATH
+diff --git a/src/runtime/arch/amd64-options.mk b/src/runtime/arch/amd64-options.mk
+index ff2af9e6..4c6c329a 100644
+--- a/src/runtime/arch/amd64-options.mk
++++ b/src/runtime/arch/amd64-options.mk
+@@ -25,4 +25,6 @@ ACRNCTLCMD := acrnctl
+ CLHCMD := cloud-hypervisor
+ 
+ # stratovirt binary name
+-STRATOVIRTCMD := stratovirt
+\ No newline at end of file
++STRATOVIRTCMD := stratovirt
++# stratovirt's ozone binary name
++STRATOVIRTOZONECMD := ozone
+\ No newline at end of file
+diff --git a/src/runtime/arch/arm64-options.mk b/src/runtime/arch/arm64-options.mk
+index 2ad3f657..5dfa2c80 100644
+--- a/src/runtime/arch/arm64-options.mk
++++ b/src/runtime/arch/arm64-options.mk
+@@ -21,4 +21,6 @@ FCJAILERCMD := jailer
+ CLHCMD := cloud-hypervisor
+ 
+ # stratovirt binary name
+-STRATOVIRTCMD := stratovirt
+\ No newline at end of file
++STRATOVIRTCMD := stratovirt
++# stratovirt's ozone binary name
++STRATOVIRTOZONECMD := ozone
+\ No newline at end of file
+diff --git a/src/runtime/cli/config/configuration-stratovirt.toml.in b/src/runtime/cli/config/configuration-stratovirt.toml.in
+index 5c83c3c9..b557b71f 100644
+--- a/src/runtime/cli/config/configuration-stratovirt.toml.in
++++ b/src/runtime/cli/config/configuration-stratovirt.toml.in
+@@ -26,6 +26,16 @@ enable_annotations = @DEFENABLEANNOTATIONS@
+ # Your distribution recommends: @STRATOVIRTVALIDHYPERVISORPATHS@
+ valid_hypervisor_paths = @STRATOVIRTVALIDHYPERVISORPATHS@
+ 
++# Path for the ozone specific to stratovirt
++# If the ozone path is set, stratovirt will be launched in 
++# ozone secure environment. It is disabled by default.
++# ozone_path = "@STRATOVIRTOZONEPATH@"
++
++# List of valid ozone path values for the hypervisor
++# Each member of the list can be a regular expression
++# The default if not set is empty (all annotations rejected.)
++# valid_jailer_paths = @STRATOVIRTVALIDOZONEPATHS@
++
+ # Optional space-separated list of options to pass to the guest kernel.
+ # For example, use `kernel_params = "vsyscall=emulate"` if you are having
+ # trouble running pre-2.15 glibc.
+diff --git a/src/runtime/pkg/katautils/config-settings.go.in b/src/runtime/pkg/katautils/config-settings.go.in
+index 7cd9138b..c168c608 100644
+--- a/src/runtime/pkg/katautils/config-settings.go.in
++++ b/src/runtime/pkg/katautils/config-settings.go.in
+@@ -17,6 +17,7 @@ var defaultInitrdPath = "/usr/share/kata-containers/kata-containers-initrd.img"
+ var defaultFirmwarePath = ""
+ var defaultMachineAccelerators = ""
+ var defaultCPUFeatures = ""
++var defaultOzonePath = "/usr/bin/ozone"
+ var systemdUnitName = "kata-containers.target"
+ 
+ const defaultKernelParams = ""
+diff --git a/src/runtime/pkg/katautils/config.go b/src/runtime/pkg/katautils/config.go
+index f94ac4fd..828c2a43 100644
+--- a/src/runtime/pkg/katautils/config.go
++++ b/src/runtime/pkg/katautils/config.go
+@@ -92,6 +92,7 @@ type hypervisor struct {
+ 	FileBackedMemRootDir    string   `toml:"file_mem_backend"`
+ 	GuestHookPath           string   `toml:"guest_hook_path"`
+ 	GuestMemoryDumpPath     string   `toml:"guest_memory_dump_path"`
++	OzonePath               string   `toml:"ozone_path"`
+ 	HypervisorPathList      []string `toml:"valid_hypervisor_paths"`
+ 	JailerPathList          []string `toml:"valid_jailer_paths"`
+ 	CtlPathList             []string `toml:"valid_ctlpaths"`
+@@ -452,6 +453,16 @@ func (h hypervisor) getInitrdAndImage() (initrd string, image string, err error)
+ 	return
+ }
+ 
++func (h hypervisor) ozonePath() (string, error) {
++	p := h.OzonePath
++
++	if h.OzonePath == "" {
++		return "", nil
++	}
++
++	return ResolvePath(p)
++}
++
+ func (h hypervisor) getRxRateLimiterCfg() uint64 {
+ 	return h.RxRateLimiterMaxRate
+ }
+@@ -877,6 +888,11 @@ func newStratovirtHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		return vc.HypervisorConfig{}, err
+ 	}
+ 
++	ozone, err := h.ozonePath()
++	if err != nil {
++		return vc.HypervisorConfig{}, err
++	}
++
+ 	kernel, err := h.kernel()
+ 	if err != nil {
+ 		return vc.HypervisorConfig{}, err
+@@ -925,6 +941,7 @@ func newStratovirtHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		KernelPath:              kernel,
+ 		InitrdPath:              initrd,
+ 		ImagePath:               image,
++		OzonePath:               ozone,
+ 		KernelParams:            vc.DeserializeParams(strings.Fields(kernelParams)),
+ 		HypervisorMachineType:   machineType,
+ 		NumVCPUs:                h.defaultVCPUs(),
+@@ -1155,6 +1172,7 @@ func GetDefaultHypervisorConfig() vc.HypervisorConfig {
+ 		RxRateLimiterMaxRate:    defaultRxRateLimiterMaxRate,
+ 		TxRateLimiterMaxRate:    defaultTxRateLimiterMaxRate,
+ 		SGXEPCSize:              defaultSGXEPCSize,
++		OzonePath:               defaultOzonePath,
+ 	}
+ }
+ 
+diff --git a/src/runtime/virtcontainers/hypervisor.go b/src/runtime/virtcontainers/hypervisor.go
+index 615baa80..04e14b4e 100644
+--- a/src/runtime/virtcontainers/hypervisor.go
++++ b/src/runtime/virtcontainers/hypervisor.go
+@@ -302,6 +302,9 @@ type HypervisorConfig struct {
+ 	// JailerPathList is the list of jailer paths names allowed in annotations
+ 	JailerPathList []string
+ 
++	// OzonePath is the ozone executable host path.
++	OzonePath string
++
+ 	// BlockDeviceDriver specifies the driver to be used for block device
+ 	// either VirtioSCSI or VirtioBlock with the default driver being defaultBlockDriver
+ 	BlockDeviceDriver string
+diff --git a/src/runtime/virtcontainers/persist.go b/src/runtime/virtcontainers/persist.go
+index 203495e8..ae499c97 100644
+--- a/src/runtime/virtcontainers/persist.go
++++ b/src/runtime/virtcontainers/persist.go
+@@ -219,6 +219,7 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 		HypervisorCtlPathList:   sconfig.HypervisorConfig.HypervisorCtlPathList,
+ 		JailerPath:              sconfig.HypervisorConfig.JailerPath,
+ 		JailerPathList:          sconfig.HypervisorConfig.JailerPathList,
++		OzonePath:               sconfig.HypervisorConfig.OzonePath,
+ 		BlockDeviceDriver:       sconfig.HypervisorConfig.BlockDeviceDriver,
+ 		HypervisorMachineType:   sconfig.HypervisorConfig.HypervisorMachineType,
+ 		MemoryPath:              sconfig.HypervisorConfig.MemoryPath,
+diff --git a/src/runtime/virtcontainers/persist/api/config.go b/src/runtime/virtcontainers/persist/api/config.go
+index 3bd5567d..88903723 100644
+--- a/src/runtime/virtcontainers/persist/api/config.go
++++ b/src/runtime/virtcontainers/persist/api/config.go
+@@ -76,6 +76,9 @@ type HypervisorConfig struct {
+ 	// JailerPathList is the list of jailer paths names allowed in annotations
+ 	JailerPathList []string
+ 
++	// OzonePath is the ozone executable host path.
++	OzonePath string
++
+ 	// BlockDeviceDriver specifies the driver to be used for block device
+ 	// either VirtioSCSI or VirtioBlock with the default driver being defaultBlockDriver
+ 	BlockDeviceDriver string
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index 0f473e31..47daa817 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -3,6 +3,7 @@ package virtcontainers
+ import (
+ 	"context"
+ 	"fmt"
++	"io/ioutil"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -24,10 +25,15 @@ import (
+ 	otelTrace "go.opentelemetry.io/otel/trace"
+ )
+ 
+-const defaultDummyMac = "22:33:44:aa:bb:"
+-const mmioBlkCount = 4
+-const mmioNetCount = 2
+-const randomDevice = "/dev/urandom"
++const (
++	apiSocket       = "qmp.socket"
++	debugSocket     = "console.socket"
++	ozoneBaseDir    = "/srv/ozone/stratovirt"
++	defaultDummyMac = "22:33:44:aa:bb:"
++	mmioBlkCount    = 4
++	mmioNetCount    = 2
++	randomDevice = "/dev/urandom"
++)
+ 
+ type stratovirtDev struct {
+ 	dev     interface{}
+@@ -40,10 +46,19 @@ type stratovirt struct {
+ 	sandbox         *Sandbox
+ 	store           persistapi.PersistDriver
+ 	config          HypervisorConfig
++	rootfsPath      string
++	kernelPath      string
+ 	pid             int
+ 	consolePath     string
+ 	socketPath      string
++	netNSPath       string
+ 	qmpMonitorCh    qmpChannel
++	ozoneRoot       string
++	ozoneRes        []string
++	useOzone        bool
++	useImage        bool
++	pidfile         string
++	logfile         string
+ 	devices         []stratovirtDev
+ 	HotpluggedVCPUs []CPUDevice
+ 	mmioBlkSlots    [mmioBlkCount]bool
+@@ -66,10 +81,10 @@ func (s *stratovirt) trace(parent context.Context, name string) (otelTrace.Span,
+ 	return span, ctx
+ }
+ 
+-func (s *stratovirt) getKernelCmdLine(useImage bool) string {
++func (s *stratovirt) getKernelCmdLine() string {
+ 	var params []string
+ 
+-	if useImage {
++	if s.useImage {
+ 		params = append(params, "root=/dev/vda")
+ 	}
+ 
+@@ -100,14 +115,49 @@ func (s *stratovirt) createSandbox(ctx context.Context, id string, networkNS Net
+ 
+ 	s.id = id
+ 	s.config = *hypervisorConfig
+-
+-	s.socketPath = filepath.Join(s.store.RunVMStoragePath(), id, "qmp.sock")
+-	s.consolePath = filepath.Join(s.store.RunVMStoragePath(), id, "console.sock")
++	if s.config.OzonePath == "" {
++		s.useOzone = false
++		s.pidfile = filepath.Join(s.store.RunVMStoragePath(), s.id, "pid")
++		s.logfile = filepath.Join(s.store.RunVMStoragePath(), s.id, "/stratovirt.log")
++		s.socketPath = filepath.Join(s.store.RunVMStoragePath(), id, apiSocket)
++		s.consolePath = filepath.Join(s.store.RunVMStoragePath(), id, debugSocket)
++	} else {
++		s.useOzone = true
++		s.ozoneRoot = filepath.Join(ozoneBaseDir, s.id)
++		s.pidfile = filepath.Join(s.ozoneRoot, "pid")
++		s.logfile = filepath.Join(s.ozoneRoot, "stratovirt.log")
++		s.socketPath = filepath.Join(s.ozoneRoot, apiSocket)
++		s.consolePath = filepath.Join(s.ozoneRoot, debugSocket)
++	}
++	s.netNSPath = networkNS.NetNsPath
+ 	s.qmpMonitorCh = qmpChannel{
+ 		ctx:  s.ctx,
+ 		path: s.socketPath,
+ 	}
+ 
++	if kernelPath, err := s.config.KernelAssetPath(); err == nil {
++		s.kernelPath = kernelPath
++		s.ozoneRes = append(s.ozoneRes, s.kernelPath)
++	}
++
++	initrdPath, err := s.config.InitrdAssetPath()
++	if err != nil {
++		return err
++	}
++
++	if initrdPath == "" {
++		imagePath, err := s.config.ImageAssetPath()
++		if err != nil {
++			return err
++		}
++		s.useImage = true
++		s.rootfsPath = imagePath
++	} else {
++		s.useImage = false
++		s.rootfsPath = initrdPath
++	}
++	s.ozoneRes = append(s.ozoneRes, s.rootfsPath)
++
+ 	return nil
+ }
+ 
+@@ -134,48 +184,43 @@ func (s *stratovirt) waitSandBoxStarted(timeout int) error {
+ 	return nil
+ }
+ 
+-func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
+-	span, _ := s.trace(ctx, "startSandbox")
+-	defer span.End()
+-
++func (s *stratovirt) createbaseParams() []string {
+ 	var params []string
+-	var use_image bool
++
+ 	params = append(params, "-name", fmt.Sprintf("sandbox-%s", s.id))
+-	params = append(params, "-qmp", fmt.Sprintf("unix:%s,server,nowait", s.socketPath))
++	params = append(params, "-append", s.getKernelCmdLine())
++	params = append(params, "-smp", fmt.Sprintf("%d", s.config.NumVCPUs))
++	params = append(params, "-m", fmt.Sprintf("%d", uint64(s.config.MemorySize)))
++	params = append(params, "-device", "virtio-serial-device")
++	params = append(params, "-device", "virtconsole,chardev=charconsole0,id=virtioconsole0")
++	params = append(params, "-object", fmt.Sprintf("rng-random,id=objrng0,filename=%s", randomDevice))
++	params = append(params, "-device", "virtio-rng-device,rng=objrng0")
+ 
+-	if kernelPath, err := s.config.KernelAssetPath(); err == nil {
+-		params = append(params, "-kernel", kernelPath)
+-	}
++	// daemonize
++	params = append(params, "-daemonize")
+ 
+-	initrdPath, err := s.config.InitrdAssetPath()
+-	if err != nil {
+-		return err
++	return params
++}
++
++func (s *stratovirt) createOzoneParams(params []string) ([]string, error) {
++	params = append(params, "-qmp", fmt.Sprintf("unix:%s,server,nowait", apiSocket))
++	params = append(params, "-chardev", fmt.Sprintf("socket,id=charconsole0,path=%s,server,nowait", debugSocket))
++	params = append(params, "-kernel", filepath.Base(s.kernelPath))
++	params = append(params, "-pidfile", filepath.Base(s.pidfile))
++
++	// append logfile only on debug
++	if s.config.Debug {
++		params = append(params, "-D", filepath.Base(s.logfile))
+ 	}
+ 
+-	if initrdPath == "" {
+-		imagePath, err := s.config.ImageAssetPath()
+-		if err != nil {
+-			return err
+-		}
+-		use_image = true
++	if s.useImage {
+ 		s.mmioBlkSlots[0] = true
+ 		params = append(params, "-device", "virtio-blk-device,drive=rootfs")
+-		params = append(params, "-drive", fmt.Sprintf("id=rootfs,file=%s,direct=off", imagePath))
++		params = append(params, "-drive", fmt.Sprintf("id=rootfs,file=%s,direct=off", filepath.Base(s.rootfsPath)))
+ 	} else {
+-		use_image = false
+-		params = append(params, "-initrd", initrdPath)
++		params = append(params, "-initrd", filepath.Base(s.rootfsPath))
+ 	}
+ 
+-	params = append(params, "-append", s.getKernelCmdLine(use_image))
+-	params = append(params, "-smp", fmt.Sprintf("%d", s.config.NumVCPUs))
+-	params = append(params, "-m", fmt.Sprintf("%d", uint64(s.config.MemorySize)))
+-	params = append(params, "-device", "virtio-serial-device")
+-	params = append(params, "-device", "virtconsole,chardev=charconsole0,id=virtioconsole0")
+-	params = append(params, "-object", fmt.Sprintf("rng-random,id=objrng0,filename=%s", randomDevice))
+-	params = append(params, "-device", "virtio-rng-device,rng=objrng0")
+-	params = append(params, "-chardev", fmt.Sprintf("socket,id=charconsole0,path=%s,server,nowait", s.consolePath))
+-	params = append(params, "-pidfile", filepath.Join(s.store.RunVMStoragePath(), s.id, "pid"))
+-
+ 	// add devices to cmdline
+ 	for _, d := range s.devices {
+ 		switch v := d.dev.(type) {
+@@ -188,8 +233,9 @@ func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
+ 		case config.BlockDrive:
+ 			id := v.ID
+ 			path := v.File
+-			params = append(params, "-device", fmt.Sprintf("virtio-blk-device, drive=%s", id))
+-			params = append(params, "-drive", fmt.Sprintf("id=%s,file=%s", id, path))
++			s.ozoneRes = append(s.ozoneRes, path)
++			params = append(params, "-device", fmt.Sprintf("virtio-blk-device,drive=%s", id))
++			params = append(params, "-drive", fmt.Sprintf("id=%s,file=%s", id, filepath.Base(path)))
+ 		case types.VSock:
+ 			v.VhostFd.Close()
+ 			params = append(params, "-device", fmt.Sprintf("vhost-vsock-device,id=vsock-id,guest-cid=%d", v.ContextID))
+@@ -198,42 +244,125 @@ func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
+ 		}
+ 	}
+ 
+-	// daemonize
+-	params = append(params, "-daemonize")
++	return params, nil
++}
++
++func (s *stratovirt) createParams(params []string) ([]string, error) {
++	params = append(params, "-qmp", fmt.Sprintf("unix:%s,server,nowait", s.socketPath))
++	params = append(params, "-chardev", fmt.Sprintf("socket,id=charconsole0,path=%s,server,nowait", s.consolePath))
++	params = append(params, "-kernel", s.kernelPath)
++	params = append(params, "-pidfile", s.pidfile)
+ 
+ 	// append logfile only on debug
+ 	if s.config.Debug {
+-		dir := filepath.Join(s.store.RunVMStoragePath(), s.id)
+-		params = append(params, "-D", fmt.Sprintf("%s/stratovirt.log", dir))
++		params = append(params, "-D", s.logfile)
++	}
++
++	if s.useImage {
++		s.mmioBlkSlots[0] = true
++		params = append(params, "-device", "virtio-blk-device,drive=rootfs")
++		params = append(params, "-drive", fmt.Sprintf("id=rootfs,file=%s,direct=off", s.rootfsPath))
++	} else {
++		params = append(params, "-initrd", s.rootfsPath)
+ 	}
+ 
+-	dir := filepath.Join(s.store.RunVMStoragePath(), s.id)
+-	err = os.MkdirAll(dir, DirMode)
++	// add devices to cmdline
++	for _, d := range s.devices {
++		switch v := d.dev.(type) {
++		case Endpoint:
++			name := v.Name()
++			mac := v.HardwareAddr()
++			tapName := v.NetworkPair().TapInterface.TAPIface.Name
++			params = append(params, "-device", fmt.Sprintf("virtio-net-device,netdev=%s,id=%s,mac=%s", name, name, mac))
++			params = append(params, "-netdev", fmt.Sprintf("tap,id=%s,ifname=%s", name, tapName))
++		case config.BlockDrive:
++			id := v.ID
++			path := v.File
++			params = append(params, "-device", fmt.Sprintf("virtio-blk-device,drive=%s", id))
++			params = append(params, "-drive", fmt.Sprintf("id=%s,file=%s", id, path))
++		case types.VSock:
++			v.VhostFd.Close()
++			params = append(params, "-device", fmt.Sprintf("vhost-vsock-device,id=vsock-id,guest-cid=%d", v.ContextID))
++		default:
++			s.Logger().Error("Adding device type is unsupported")
++		}
++	}
++
++	return params, nil
++}
++
++func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
++	span, _ := s.trace(ctx, "startSandbox")
++	defer span.End()
++
++	var err error
++	var cmd *exec.Cmd
++
++	params := s.createbaseParams()
++
++	stratovirtBinPath, err := s.config.HypervisorAssetPath()
+ 	if err != nil {
+ 		return err
+ 	}
+-	defer func() {
++
++	if s.useOzone {
++		var ozoneParams []string
++		extend_params, err := s.createOzoneParams(params)
+ 		if err != nil {
+-			if err := os.RemoveAll(dir); err != nil {
+-				s.Logger().WithError(err).Error("Fail to clean up vm dir %s", dir)
++			return err
++		}
++		ozoneParams = append(ozoneParams, "-exec-file", stratovirtBinPath)
++		ozoneParams = append(ozoneParams, "-name", s.id)
++		ozoneParams = append(ozoneParams, "-gid", "0")
++		ozoneParams = append(ozoneParams, "-uid", "0")
++		if s.netNSPath != "" {
++			ozoneParams = append(ozoneParams, "-netns", s.netNSPath)
++		}
++
++		ozoneParams = append(ozoneParams, "-source")
++		ozoneParams = append(ozoneParams, s.ozoneRes...)
++
++		defer func() {
++			if err != nil {
++				ozoneParams = append(ozoneParams, "-clean-resource")
++				cmd = exec.CommandContext(s.ctx, s.config.OzonePath, ozoneParams...)
++				if err := cmd.Run(); err != nil {
++					s.Logger().WithError(err).Error("Failed to clean up ozone dir %s", s.ozoneRoot)
++				}
+ 			}
++		}()
++
++		ozoneParams = append(ozoneParams, "--")
++		ozoneParams = append(ozoneParams, extend_params...)
++		cmd = exec.CommandContext(s.ctx, s.config.OzonePath, ozoneParams...)
++		s.Logger().Info("StratoVirt/Ozone start with params: ", cmd)
++	} else {
++		params, err = s.createParams(params)
++		if err != nil {
++			return err
+ 		}
+-	}()
+ 
+-	binPath, err := s.config.HypervisorAssetPath()
+-	if err != nil {
+-		s.Logger().WithField("Fail to get hypervisor bin path", err).Error()
+-		return err
+-	}
++		dir := filepath.Join(s.store.RunVMStoragePath(), s.id)
++		err = os.MkdirAll(dir, DirMode)
++		if err != nil {
++			return err
++		}
++		defer func() {
++			if err != nil {
++				if err := os.RemoveAll(dir); err != nil {
++					s.Logger().WithError(err).Error("Fail to clean up vm dir %s", dir)
++				}
++			}
++		}()
+ 
+-	cmd := exec.CommandContext(s.ctx, binPath, params...)
+-	s.Logger().Info("StratoVirt start with params: ", cmd)
++		cmd = exec.CommandContext(s.ctx, stratovirtBinPath, params...)
++		s.Logger().Info("StratoVirt start with params: ", cmd)
++	}
+ 
+ 	if err := cmd.Start(); err != nil {
+ 		s.Logger().WithField("Error starting hypervisor, please check the params", err).Error()
+ 		return err
+ 	}
+-	s.pid = cmd.Process.Pid
+ 
+ 	if err = s.waitSandBoxStarted(timeout); err != nil {
+ 		return err
+@@ -420,6 +549,7 @@ func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op opera
+ }
+ 
+ func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err error) {
++	var filePath string
+ 	err = s.qmpSetup()
+ 	if err != nil {
+ 		return err
+@@ -427,13 +557,18 @@ func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err err
+ 
+ 	switch op {
+ 	case addDevice:
+-		driver := "virtio-blk-pci"
++		driver := "virtio-blk-mmio"
++		if s.useOzone {
++			filePath, err = s.updateOzoneRes(drive.File, true)
++		} else {
++			filePath = drive.File
++		}
+ 		slot, err := s.getDevSlot(drive.VirtPath, false)
+ 		if err != nil {
+ 			return fmt.Errorf("Could not get unused slot for %q", drive.VirtPath)
+ 		}
+ 
+-		if err := s.qmpMonitorCh.qmp.ExecuteBlockdevAdd(s.qmpMonitorCh.ctx, drive.File, drive.ID, false); err != nil {
++		if err := s.qmpMonitorCh.qmp.ExecuteBlockdevAdd(s.qmpMonitorCh.ctx, filePath, drive.ID, false); err != nil {
+ 			s.getDevSlot(drive.VirtPath, true)
+ 			return err
+ 		}
+@@ -443,6 +578,9 @@ func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err err
+ 			return err
+ 		}
+ 	case removeDevice:
++		if s.useOzone {
++			s.updateOzoneRes(drive.File, false)
++		}
+ 		if err := s.qmpMonitorCh.qmp.ExecuteDeviceDel(s.qmpMonitorCh.ctx, drive.ID); err != nil {
+ 			return err
+ 		}
+@@ -582,17 +720,62 @@ func (s *stratovirt) getThreadIDs(ctx context.Context) (vcpuThreadIDs, error) {
+ 	return tid, nil
+ }
+ 
++func (s *stratovirt) updateOzoneRes(src string, add bool) (string, error) {
++	dst := filepath.Join(s.ozoneRoot, filepath.Base(src))
++	if add {
++		if err := bindMount(context.Background(), src, dst, false, "slave"); err != nil {
++			s.Logger().WithField("bindMount failed", err).Error()
++			return "", err
++		}
++	} else {
++		syscall.Unmount(dst, syscall.MNT_DETACH)
++	}
++	return filepath.Base(src), nil
++}
++
++func (s *stratovirt) cleanOzoneRes() {
++	s.updateOzoneRes(s.rootfsPath, false)
++	s.updateOzoneRes(s.kernelPath, false)
++
++	if err := os.RemoveAll(s.ozoneRoot); err != nil {
++		s.Logger().WithField("cleanupOzone failed", err).Error()
++	}
++}
++
+ func (s *stratovirt) cleanup(ctx context.Context) error {
+ 	span, _ := s.trace(ctx, "cleanup")
+ 	defer span.End()
+ 
+ 	s.qmpTeardown()
++	if s.useOzone {
++		s.cleanOzoneRes()
++	}
+ 
+ 	return nil
+ }
+ 
+ func (s *stratovirt) getPids() []int {
+-	return []int{s.pid}
++	var pids []int
++	if s.pid != 0 {
++		pids = append(pids, s.pid)
++	} else {
++		pid, err := ioutil.ReadFile(s.pidfile)
++		if err != nil {
++			s.Logger().WithError(err).Error("Read pid file failed.")
++			return []int{0}
++		}
++
++		p, err := strconv.Atoi(strings.Trim(string(pid), "\n\t "))
++		if err != nil {
++			s.Logger().WithError(err).Error("Get pid from pid file failed.")
++			return []int{0}
++		}
++
++		pids = append(pids, p)
++		s.pid = p
++	}
++
++	return pids
+ }
+ 
+ func (s *stratovirt) getVirtioFsPid() *int {
+-- 
+2.21.1 (Apple Git-122.3)
+

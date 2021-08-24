@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 2
+%define RELEASE 3
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -103,11 +103,18 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 /var/lib/kata/kernel
 /var/lib/kata/kata-containers-initrd.img
 %config(noreplace) /usr/share/defaults/kata-containers/configuration.toml
+%config(noreplace) /usr/share/defaults/kata-containers/configuration-stratovirt.toml
 
 %doc
 
 %changelog
-* Wed Aug 20 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-2
+* Tue Aug 24 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-3
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:add configuration-stratovirt.toml
+
+* Fri Aug 20 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-2
 - Type:enhancement
 - ID:NA
 - SUG:NA

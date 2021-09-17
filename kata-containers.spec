@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 3
+%define RELEASE 4
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -65,10 +65,10 @@ replace-with = "vendored-sources"
 [source.vendored-sources]
 directory = "vendor"
 EOF
-/usr/bin/env CARGO_HOME=.cargo RUSTC_BOOTSTRAP=1 cargo build
+/usr/bin/env CARGO_HOME=.cargo RUSTC_BOOTSTRAP=1 cargo build --release
 cd %{_builddir}/kata_integration
 mkdir -p -m 750 build
-cp %{_builddir}/kata-containers/src/agent/target/debug/kata-agent ./build/
+cp %{_builddir}/kata-containers/src/agent/target/release/kata-agent ./build/
 strip ./build/kata-agent
 make initrd
 
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Sep 17 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-4
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:modify kata-agent build flags
+
 * Tue Aug 24 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-3
 - Type:enhancement
 - ID:NA

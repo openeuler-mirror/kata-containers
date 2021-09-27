@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 4
+%define RELEASE 5
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Mon Sep 27 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-5
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:chmod agent exec fifo
+
 * Fri Sep 17 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-4
 - Type:enhancement
 - ID:NA

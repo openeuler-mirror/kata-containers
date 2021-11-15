@@ -1,0 +1,115 @@
+From c355523761598154653466033a1d88643d3fd3df Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Thu, 4 Nov 2021 20:27:22 +0800
+Subject: [PATCH 2/8] kata-runtime: fix kata-runtime skip read lines in
+ /proc/mounts file problem
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ .../virtcontainers/utils/utils_linux.go       | 61 +++++++++++--------
+ 1 file changed, 36 insertions(+), 25 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/utils/utils_linux.go b/src/runtime/virtcontainers/utils/utils_linux.go
+index 3c14e0c..c6dbd0a 100644
+--- a/src/runtime/virtcontainers/utils/utils_linux.go
++++ b/src/runtime/virtcontainers/utils/utils_linux.go
+@@ -7,15 +7,18 @@ package utils
+ 
+ import (
+ 	"bufio"
++	"bytes"
+ 	"crypto/rand"
+ 	"fmt"
+ 	"io"
++	"io/ioutil"
+ 	"math/big"
+ 	"os"
+ 	"strings"
+ 	"syscall"
+ 	"unsafe"
+ 
++	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+ )
+ 
+@@ -93,6 +96,7 @@ const (
+ 	procMountsFile = "/proc/mounts"
+ 
+ 	fieldsPerLine  = 6
++	maxRetryTimes  = 5
+ 	vfioAPSysfsDir = "vfio_ap"
+ )
+ 
+@@ -110,37 +114,44 @@ func GetDevicePathAndFsType(mountPoint string) (devicePath, fsType string, err e
+ 		return
+ 	}
+ 
+-	var file *os.File
++	var retry int = 0
+ 
+-	file, err = os.Open(procMountsFile)
+-	if err != nil {
+-		return
+-	}
+-
+-	defer file.Close()
+-
+-	reader := bufio.NewReader(file)
+-	for {
+-		var line string
+-
+-		line, err = reader.ReadString('\n')
+-		if err == io.EOF {
+-			err = fmt.Errorf("Mount %s not found", mountPoint)
++	for retry <= maxRetryTimes {
++		var content []byte
++		content, err = ioutil.ReadFile(procMountsFile)
++		if err != nil {
+ 			return
+ 		}
+-
+-		fields := strings.Fields(line)
+-		if len(fields) != fieldsPerLine {
+-			err = fmt.Errorf("Incorrect no of fields (expected %d, got %d)) :%s", fieldsPerLine, len(fields), line)
+-			return
++		bytesReader := bytes.NewReader(content)
++		reader := bufio.NewReader(bytesReader)
++
++		for {
++			var line string
++
++			line, err = reader.ReadString('\n')
++			if err == io.EOF {
++				err = fmt.Errorf("Mount %s not found", mountPoint)
++				break
++			}
++
++			fields := strings.Fields(line)
++			if len(fields) != fieldsPerLine {
++				err = fmt.Errorf("Incorrect no of fields (expected %d, got %d)) :%s", fieldsPerLine, len(fields), line)
++				return
++			}
++
++			if mountPoint == fields[procPathIndex] {
++				devicePath = fields[procDeviceIndex]
++				fsType = fields[procTypeIndex]
++				return
++			}
+ 		}
+-
+-		if mountPoint == fields[procPathIndex] {
+-			devicePath = fields[procDeviceIndex]
+-			fsType = fields[procTypeIndex]
+-			return
++		retry = retry + 1
++		if retry <= maxRetryTimes {
++			logrus.Warnf("can not find %s in %s, retry %d times again......", mountPoint, procMountsFile, retry)
+ 		}
+ 	}
++	return "", "", fmt.Errorf("retry %d times fail to get devicePath adn fs type", maxRetryTimes)
+ }
+ 
+ // IsAPVFIOMediatedDevice decides whether a device is a VFIO-AP device
+-- 
+2.25.1
+

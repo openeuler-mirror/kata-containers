@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 5
+%define RELEASE 6
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Oct 5 2021 jikui <jikui2@huawei.com> - 2.1.0-6
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix kata-runtime hungs when qemu process is D/T
+
 * Mon Sep 27 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-5
 - Type:enhancement
 - ID:NA

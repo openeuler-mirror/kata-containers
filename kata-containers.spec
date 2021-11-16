@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 7
+%define RELEASE 8
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Tue Oct 16 2021 jikui <jikui2@huawei.com> - 2.1.0-8
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:keep the qemu process name same as the configured path
+
 * Mon Oct 15 2021 jikui <jikui2@huawei.com> - 2.1.0-7
 - Type:bugfix
 - ID:NA

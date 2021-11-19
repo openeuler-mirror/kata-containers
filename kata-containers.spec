@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 9
+%define RELEASE 10
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Nov 24 2021 jikui <jikui2@huawei.com> - 2.1.0-10
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:increase delete cgroup retry times
+
 * Sat Nov 20 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-9
 - Type:bugfix
 - ID:NA

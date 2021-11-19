@@ -1,0 +1,52 @@
+From 0797bf1fec9c40b67f2770bc8778e8eaee1657c8 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Fri, 5 Nov 2021 11:35:25 +0800
+Subject: [PATCH 3/8] kata-runtime: keep the process name of qemu same as
+ configured path
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ src/runtime/pkg/katautils/config.go      | 7 ++++++-
+ src/runtime/pkg/katautils/config_test.go | 4 ++--
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/runtime/pkg/katautils/config.go b/src/runtime/pkg/katautils/config.go
+index 718677b..e0ebc84 100644
+--- a/src/runtime/pkg/katautils/config.go
++++ b/src/runtime/pkg/katautils/config.go
+@@ -172,7 +172,12 @@ func (h hypervisor) path() (string, error) {
+ 		p = defaultHypervisorPath
+ 	}
+ 
+-	return ResolvePath(p)
++	absolutePath, err := filepath.Abs(p)
++	if err != nil {
++		return "", err
++	}
++
++	return absolutePath, nil
+ }
+ 
+ func (h hypervisor) ctlpath() (string, error) {
+diff --git a/src/runtime/pkg/katautils/config_test.go b/src/runtime/pkg/katautils/config_test.go
+index 0d02534..84b7843 100644
+--- a/src/runtime/pkg/katautils/config_test.go
++++ b/src/runtime/pkg/katautils/config_test.go
+@@ -983,12 +983,12 @@ func TestHypervisorDefaultsHypervisor(t *testing.T) {
+ 	assert.NoError(err)
+ 	assert.Equal(p, defaultHypervisorPath, "default hypervisor path wrong")
+ 
+-	// test path resolution
++	// test path resolution, just return the absolute path instead of resolved path
+ 	defaultHypervisorPath = testHypervisorLinkPath
+ 	h = hypervisor{}
+ 	p, err = h.path()
+ 	assert.NoError(err)
+-	assert.Equal(p, testHypervisorPath)
++	assert.Equal(p, testHypervisorLinkPath)
+ }
+ 
+ func TestHypervisorDefaultsKernel(t *testing.T) {
+-- 
+2.25.1
+

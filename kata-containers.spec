@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 8
+%define RELEASE 9
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Sat Nov 20 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-9
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:modify kernel and image path in configuration.toml
+
 * Tue Oct 16 2021 jikui <jikui2@huawei.com> - 2.1.0-8
 - Type:bugfix
 - ID:NA

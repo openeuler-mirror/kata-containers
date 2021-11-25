@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 10
+%define RELEASE 11
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Thu Nov 25 2021 jikui <jikui2@huawei.com> - 2.1.0-11
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix umount container rootfs dir return invalid argument error
+
 * Fri Nov 24 2021 jikui <jikui2@huawei.com> - 2.1.0-10
 - Type:bugfix
 - ID:NA

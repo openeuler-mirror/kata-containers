@@ -1,0 +1,83 @@
+From 9568f7f2cad915778396dc8a2743c9c3ed7d44b7 Mon Sep 17 00:00:00 2001
+From: gaohuatao <gaohuatao@huawei.com>
+Date: Wed, 16 Jun 2021 14:54:24 +0800
+Subject: [PATCH] move waitProcess timeout to stop process
+
+reason: move timeout to stopping container process, it is only used in stopping container process to support shimv2
+
+Signed-off-by: gaohuatao <gaohuatao@huawei.com>
+---
+ virtcontainers/container.go  | 28 +++++++++++++++++++++++-----
+ virtcontainers/kata_agent.go |  3 +--
+ 2 files changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 34f6ec6..e976453 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -51,6 +51,8 @@ var cdromMajors = map[int64]string{
+ 	32: "CM206_CDROM_MAJOR",
+ }
+ 
++var waitProcessTimeout = 10 * time.Second
++
+ var safeCopyFiles = map[string]struct{}{
+ 	"resolv.conf": {},
+ 	"hostname":    {},
+@@ -1174,11 +1176,27 @@ func (c *Container) stop(force bool) error {
+ 		c.Logger().Errorf("send signal to container failed: %v", err)
+ 	}
+ 
+-	// Since the agent has supported the MultiWaitProcess, it's better to
+-	// wait the process here to make sure the process has exited before to
+-	// issue stopContainer, otherwise the RemoveContainerRequest in it will
+-	// get failed if the process hasn't exited.
+-	c.sandbox.agent.waitProcess(c, c.id)
++	done := make(chan error)
++	go func() {
++		// Since the agent has supported the MultiWaitProcess, it's better to
++		// wait the process here to make sure the process has exited before to
++		// issue stopContainer, otherwise the RemoveContainerRequest in it will
++		// get failed if the process hasn't exited.
++		_, err := c.sandbox.agent.waitProcess(c, c.id)
++		if err != nil {
++			done <- err
++		}
++		close(done)
++	}()
++
++	select {
++	case err := <-done:
++		if err != nil {
++			c.Logger().Errorf("wait process failed:%v", err)
++		}
++	case <-time.After(time.Duration(waitProcessTimeout) * time.Second):
++		// Nothing to do
++	}
+ 
+ 	defer func() {
+ 		// Save device and drive data.
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index 058d79e..2717e30 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -59,7 +59,6 @@ const (
+ )
+ 
+ var (
+-	waitProcessTimeout          = 10 * time.Second
+ 	checkRequestTimeout         = 10 * time.Second
+ 	defaultRequestTimeout       = 10 * time.Second
+ 	createContainerTimeout      = 120 * time.Second
+@@ -2155,7 +2154,7 @@ func (k *kataAgent) getReqContext(reqName string) (ctx context.Context, cancel c
+ 	ctx = context.Background()
+ 	switch reqName {
+ 	case grpcWaitProcessRequest:
+-		ctx, cancel = context.WithTimeout(ctx, waitProcessTimeout)
++		// Wait has no timeout
+ 	case grpcCheckRequest:
+ 		ctx, cancel = context.WithTimeout(ctx, checkRequestTimeout)
+ 	case grpcCreateContainerRequest:
+-- 
+2.20.1
+

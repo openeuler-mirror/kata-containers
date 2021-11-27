@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 10
+%define RELEASE 11
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -70,7 +70,8 @@ install -p -m 755 -D %{_builddir}/kernel/linux/arch/arm64/boot/Image %{buildroot
 
 cd %{_builddir}/kata_integration
 mkdir -p -m 750  %{buildroot}/usr/bin
-install -p -m 750 ./build/kata-runtime ./build/kata-proxy ./build/kata-shim ./build/kata-netmon %{buildroot}/usr/bin/
+strip ./build/kata-runtime ./build/containerd-shim-kata-v2 ./build/kata-proxy ./build/kata-shim ./build/kata-netmon
+install -p -m 750 ./build/kata-runtime ./build/containerd-shim-kata-v2 ./build/kata-proxy ./build/kata-shim ./build/kata-netmon %{buildroot}/usr/bin/
 install -p -m 640 ./build/kata-containers-initrd.img %{buildroot}/var/lib/kata/
 mkdir -p -m 750 %{buildroot}/usr/share/defaults/kata-containers/
 install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/usr/share/defaults/kata-containers/configuration.toml
@@ -79,6 +80,7 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 %files
 /usr/bin/kata-runtime
+/usr/bin/containerd-shim-kata-v2
 /usr/bin/kata-proxy
 /usr/bin/kata-shim
 /usr/bin/kata-netmon
@@ -90,6 +92,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Sat Nov 27 2021 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-11
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:support shimv2 with isulad
+
 * Tue Feb 23 2021 xinghe <xinghe1@huawei.com> - 1.11.1-10
 - Type:CVE
 - ID:NA

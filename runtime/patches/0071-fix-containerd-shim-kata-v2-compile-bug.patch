@@ -1,0 +1,32 @@
+From c9737d7702e4042bcc433da720611ebac06f6f6d Mon Sep 17 00:00:00 2001
+From: gaohuatao <gaohuatao@huawei.com>
+Date: Wed, 28 Apr 2021 15:04:02 +0800
+Subject: [PATCH 1/2] fix containerd shim kata v2 compile bug
+
+reason: fix containerd shim kata v2 compile bug
+
+Signed-off-by: gaohuatao <gaohuatao@huawei.com>
+---
+ containerd-shim-v2/metrics.go | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/containerd-shim-v2/metrics.go b/containerd-shim-v2/metrics.go
+index c936966..d59530f 100644
+--- a/containerd-shim-v2/metrics.go
++++ b/containerd-shim-v2/metrics.go
+@@ -172,9 +172,9 @@ func copyBlkio(s []vc.BlkioStatEntry) []*cgroups.BlkIOEntry {
+ 	return ret
+ }
+ 
+-func setNetworkStats(vcNetwork []*vc.NetworkStats) []*cgroups.NetworkStat {
+-	networkStats := make([]*cgroups.NetworkStat, len(vcNetwork))
+-	for i, v := range vcNetwork {
++func setNetworkStats(vcNetwork *vc.NetworkStats) []*cgroups.NetworkStat {
++	networkStats := make([]*cgroups.NetworkStat, len(vcNetwork.Interfaces))
++	for i, v := range vcNetwork.Interfaces {
+ 		networkStats[i] = &cgroups.NetworkStat{
+ 			Name:      v.Name,
+ 			RxBytes:   v.RxBytes,
+-- 
+2.20.1
+

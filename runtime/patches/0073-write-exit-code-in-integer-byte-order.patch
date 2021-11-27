@@ -1,0 +1,78 @@
+From 3282a8bb49fff14b1eb9742544803255bfa82a82 Mon Sep 17 00:00:00 2001
+From: gaohuatao <gaohuatao@huawei.com>
+Date: Wed, 12 May 2021 17:17:41 +0800
+Subject: [PATCH] write exit code in integer byte order
+
+reason: write exit code in integer byte order just to adapt iSulad
+
+Signed-off-by: gaohuatao <gaohuatao@huawei.com>
+---
+ containerd-shim-v2/service.go | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/containerd-shim-v2/service.go b/containerd-shim-v2/service.go
+index c85eb24..9c40f43 100644
+--- a/containerd-shim-v2/service.go
++++ b/containerd-shim-v2/service.go
+@@ -6,14 +6,16 @@
+ package containerdshim
+ 
+ import (
++	"bytes"
+ 	"context"
++	"encoding/binary"
+ 	"io/ioutil"
+ 	"os"
+ 	sysexec "os/exec"
+-	"strconv"
+ 	"sync"
+ 	"syscall"
+ 	"time"
++	"unsafe"
+ 
+ 	eventstypes "github.com/containerd/containerd/api/events"
+ 	"github.com/containerd/containerd/api/types/task"
+@@ -893,6 +895,12 @@ func (s *service) processExits() {
+ 	}
+ }
+ 
++func isBigEndian() (ret bool) {
++	i := int(0x1)
++	bs := (*[int(unsafe.Sizeof(i))]byte)(unsafe.Pointer(&i))
++	return bs[0] == 0
++}
++
+ func (s *service) closeExitFifo(e exit) {
+ 	if e.execid != "" {
+ 		// not a container, no need to close exit fifo
+@@ -900,6 +908,7 @@ func (s *service) closeExitFifo(e exit) {
+ 	}
+ 
+ 	var ret uint32
++	var nativeEndian binary.ByteOrder
+ 
+ 	s.mu.Lock()
+ 	c, err := s.getContainer(e.id)
+@@ -914,9 +923,17 @@ func (s *service) closeExitFifo(e exit) {
+ 	// refill the exitCh with the container process's exit code in case
+ 	// there were other waits on this process.
+ 	c.exitCh <- ret
+-	exitStr := strconv.FormatUint(uint64(ret), 10)
++	
++	if isBigEndian() {
++		nativeEndian = binary.BigEndian
++	} else {
++		nativeEndian = binary.LittleEndian
++	}
++
++	bytesBuffer := bytes.NewBuffer([]byte{})
++	binary.Write(bytesBuffer, nativeEndian, &ret)
+ 
+-	_, err = c.exitFd.Write([]byte(exitStr))
++	_, err = c.exitFd.Write(bytesBuffer.Bytes())
+ 	if err != nil {
+ 		logrus.WithError(err).Error("write exit fifo failed")
+ 	}
+-- 
+2.20.1
+

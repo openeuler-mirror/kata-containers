@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 11
+%define RELEASE 12
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Sat Nov 27 2021 yangfeiyu<yangfeiyu20102011@163.com> - 1.11.1-12
+- Type:enhancement
+- ID:NA
+- SUG:restart
+- DESC:support shimv2 with isulad
+
 * Tue Nov 17 2020 yangfeiyu<yangfeiyu20102011@163.com> - 1.11.1-11
 - Type:bugfix
 - ID:NA

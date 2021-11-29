@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 13
+%define RELEASE 14
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Mon Nov 29 2021 jikui <jikui2@huawei.com> - 2.1.0-14
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix delete sandbox failed problem
+
 * Sat Nov 27 2021 jikui <jikui2@huawei.com> - 2.1.0-13
 - Type:bugfix
 - ID:NA

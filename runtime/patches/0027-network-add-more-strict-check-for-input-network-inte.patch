@@ -1,0 +1,182 @@
+From ec15337fc816767ca0e8183576405499080b9b1e Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sun, 16 Aug 2020 16:41:18 +0800
+Subject: [PATCH 27/50] network: add more strict check for input network
+ interface
+
+reason: kata-network add-iface command will receive the network
+interface info from untrust user, so we need to add more strict
+check for input network interface info.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/network.go | 117 ++++++++++++++++++++++++++++++++++++++++++++++
+ virtcontainers/sandbox.go |  11 +++++
+ 2 files changed, 128 insertions(+)
+
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index db235cf6..a1676ccd 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -13,8 +13,10 @@ import (
+ 	"math/rand"
+ 	"net"
+ 	"os"
++	"regexp"
+ 	"runtime"
+ 	"sort"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/containernetworking/plugins/pkg/ns"
+@@ -55,6 +57,17 @@ const (
+ 	NetXConnectInvalidModel
+ )
+ 
++const (
++	maxIPAddrLen    = 18
++	maxInterfaceLen = 15
++	minMTUVal       = 46
++	maxMTUVal       = 9600
++)
++
++var (
++	regInfName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_\-.]*$`)
++)
++
+ //IsValid checks if a model is valid
+ func (n NetInterworkingModel) IsValid() bool {
+ 	return 0 <= int(n) && int(n) < int(NetXConnectInvalidModel)
+@@ -1368,3 +1381,107 @@ func convertToCompatInterfaces(es *[]Endpoint) []*vcTypes.Interface {
+ 
+ 	return infs
+ }
++
++// verifyInterfaceName verifies the interface name valid or not
++func verifyInterfaceName(name string) error {
++	// verify `Name` before `Tapname` because of the strict rules
++	name = strings.TrimSpace(name)
++	if len(name) > maxInterfaceLen {
++		return fmt.Errorf("interface name can't be longer than 15")
++	} else if len(name) == 0 || name == "\n" {
++		return fmt.Errorf("interface name can't be empty")
++	}
++
++	// QMP rules of `Name`
++	chk := regInfName.FindAllString(name, -1)
++	if chk == nil {
++		return fmt.Errorf("invalid input of interface name, please check the rules")
++	}
++
++	return nil
++}
++
++// verifyIPAndMask verifies CIDR notation IP address and mask like "192.0.2.0/24"
++func verifyIPAndMask(ip string) (nlIpMask *net.IPNet, err error) {
++	ip = strings.TrimSpace(ip)
++
++	if len(ip) > maxIPAddrLen {
++		return nil, fmt.Errorf("the length of IP address is too long, max ip len :%d", maxIPAddrLen)
++	}
++
++	if nlIpMask, err = netlink.ParseIPNet(ip); err != nil {
++		return nil, fmt.Errorf("invalid input of IP : %v", err)
++	}
++
++	return nlIpMask, nil
++}
++
++// verifyMac verifies MAC address
++func verifyMac(mac string) error {
++	mac = strings.TrimSpace(mac)
++	if _, err := net.ParseMAC(mac); err != nil {
++		return fmt.Errorf("invalid input of Mac : %v", err)
++	}
++
++	return nil
++}
++
++// verifyMtu verifies MTU value of interface
++func verifyMtu(mtu uint64) error {
++	if mtu < minMTUVal || mtu > maxMTUVal {
++		return fmt.Errorf("invalid input of MTU : %v", mtu)
++	}
++	return nil
++}
++
++// verifyIP verifies the IP address
++func verifyIP(ip string) (*net.IP, error) {
++	ip = strings.TrimSpace(ip)
++
++	if len(ip) > maxIPAddrLen {
++		return nil, fmt.Errorf("the length of IP address is too long, max ip len :%d", maxIPAddrLen)
++	}
++
++	var netIP net.IP
++	if netIP = net.ParseIP(ip); netIP == nil {
++		return nil, fmt.Errorf("invalid IP: %s", ip)
++	}
++
++	return &netIP, nil
++}
++
++// validInterface check the input interface valid or not
++func validInterface(inf *vcTypes.Interface, enableCompatOldCNI bool) error {
++	if enableCompatOldCNI && verifyInterfaceName(inf.Device) != nil {
++		return fmt.Errorf("device name should not be empty when enable_compat_old_cni config enabled")
++	}
++
++	if inf.Name == "" || inf.Mtu == 0 || inf.HwAddr == "" {
++		return fmt.Errorf("name/mtu/hwaddr of interface must be specified")
++	}
++
++	if err := verifyInterfaceName(inf.Name); err != nil {
++		return err
++	}
++
++	if err := verifyMac(inf.HwAddr); err != nil {
++		return err
++	}
++
++	if err := verifyMtu(inf.Mtu); err != nil {
++		return err
++	}
++
++	// Currently, only one IP address can be passed, which reduces the test entry and fault injection.
++	if len(inf.IPAddresses) > 0 {
++		if len(inf.IPAddresses) != 1 {
++			return fmt.Errorf("only one IP address is supported currently")
++		}
++		_, err := verifyIP(inf.IPAddresses[0].Address)
++		if err != nil {
++			return err
++		}
++	}
++
++	return nil
++}
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 6a643a12..f6826812 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -952,6 +952,17 @@ func (s *Sandbox) generateNetInfo(inf *vcTypes.Interface) (NetworkInfo, error) {
+ 
+ // AddInterface adds new nic to the sandbox.
+ func (s *Sandbox) AddInterface(inf *vcTypes.Interface) (grpcIf *vcTypes.Interface, err error) {
++	err = validInterface(inf, s.config.NetworkConfig.EnableCompatOldCNI)
++	if err != nil {
++		return nil, err
++	}
++
++	for _, ep := range s.networkNS.Endpoints {
++		if ep.Name() == inf.Name {
++			return nil, fmt.Errorf("interface %s is already exist", inf.Name)
++		}
++	}
++
+ 	netInfo, err := s.generateNetInfo(inf)
+ 	if err != nil {
+ 		return nil, err
+-- 
+2.14.3 (Apple Git-98)
+

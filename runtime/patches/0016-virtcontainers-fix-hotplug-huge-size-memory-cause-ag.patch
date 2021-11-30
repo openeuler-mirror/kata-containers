@@ -1,0 +1,288 @@
+From dc9de8bb181e2cec2f3e0a76d02833fef45b46af Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Thu, 6 Aug 2020 09:28:34 -0400
+Subject: [PATCH 16/50] virtcontainers: fix hotplug huge size memory cause
+ agent hang bug
+
+fixes: #2872
+
+reason: If hotplug huge size memory into kata VM at once time,
+guest kernel will allocate some extra memory for memory management,
+which may cause kata-agent hang and out of responding.
+And hotplug more memory into VM, more extra memory is needed.
+
+Inorder to solve this problem, we divide hotplug huge memory into
+two steps. First, hotplug the max allowed memory into VM and wait
+all first step hotplugged memory online. Second Step, hotplug the
+left memory into VM.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/acrn.go            |  4 ++++
+ virtcontainers/agent.go           |  3 ++-
+ virtcontainers/clh.go             |  4 ++++
+ virtcontainers/fc.go              |  4 ++++
+ virtcontainers/hypervisor.go      |  3 +++
+ virtcontainers/kata_agent.go      |  4 ++--
+ virtcontainers/kata_agent_test.go |  2 +-
+ virtcontainers/mock_hypervisor.go |  4 ++++
+ virtcontainers/noop_agent.go      |  2 +-
+ virtcontainers/qemu.go            |  4 ++++
+ virtcontainers/sandbox.go         | 30 ++++++++++++++++++++++++++++--
+ virtcontainers/sandbox_test.go    | 12 ++++++++++++
+ virtcontainers/utils/utils.go     |  3 +++
+ virtcontainers/vm.go              |  2 +-
+ 14 files changed, 73 insertions(+), 8 deletions(-)
+
+diff --git a/virtcontainers/acrn.go b/virtcontainers/acrn.go
+index 10cae06f..c9a0fe0b 100644
+--- a/virtcontainers/acrn.go
++++ b/virtcontainers/acrn.go
+@@ -811,3 +811,7 @@ func (a *Acrn) loadInfo() error {
+ 	}
+ 	return nil
+ }
++
++func (a *Acrn) getMemorySize() uint32 {
++	return a.config.MemorySize
++}
+diff --git a/virtcontainers/agent.go b/virtcontainers/agent.go
+index be9526c7..b1dea816 100644
+--- a/virtcontainers/agent.go
++++ b/virtcontainers/agent.go
+@@ -201,7 +201,8 @@ type agent interface {
+ 	// This function should be called after hot adding vCPUs or Memory.
+ 	// cpus specifies the number of CPUs that were added and the agent should online
+ 	// cpuOnly specifies that we should online cpu or online memory or both
+-	onlineCPUMem(cpus uint32, cpuOnly bool) error
++	// wait specifies that we should wait all cpu or memory online in the VM synchronously
++	onlineCPUMem(cpus uint32, cpuOnly bool, wait bool) error
+ 
+ 	// memHotplugByProbe will notify the guest kernel about memory hotplug event through
+ 	// probe interface.
+diff --git a/virtcontainers/clh.go b/virtcontainers/clh.go
+index 59510b02..8afcd4bf 100644
+--- a/virtcontainers/clh.go
++++ b/virtcontainers/clh.go
+@@ -1210,3 +1210,7 @@ func (clh *cloudHypervisor) vmInfo() (chclient.VmInfo, error) {
+ 	return info, openAPIClientError(err)
+ 
+ }
++
++func (clh *cloudHypervisor) getMemorySize() uint32 {
++	return clh.config.MemorySize
++}
+diff --git a/virtcontainers/fc.go b/virtcontainers/fc.go
+index 72a8e192..15726156 100644
+--- a/virtcontainers/fc.go
++++ b/virtcontainers/fc.go
+@@ -1212,3 +1212,7 @@ func (fc *firecracker) watchConsole() (*os.File, error) {
+ 
+ 	return stdio, nil
+ }
++
++func (fc *firecracker) getMemorySize() uint32 {
++	return fc.config.MemorySize
++}
+diff --git a/virtcontainers/hypervisor.go b/virtcontainers/hypervisor.go
+index 5f8d24f9..9cd685ad 100644
+--- a/virtcontainers/hypervisor.go
++++ b/virtcontainers/hypervisor.go
+@@ -778,6 +778,9 @@ type hypervisor interface {
+ 	hotplugRemoveDevice(devInfo interface{}, devType deviceType) (interface{}, error)
+ 	resizeMemory(memMB uint32, memoryBlockSizeMB uint32, probe bool) (uint32, memoryDevice, error)
+ 	resizeVCPUs(vcpus uint32) (uint32, uint32, error)
++	// getMemorySize return the total memory in the guest include default memory size + hot plugged memory
++	// return memory size unit is MB
++	getMemorySize() uint32
+ 	getSandboxConsole(sandboxID string) (string, error)
+ 	disconnect()
+ 	capabilities() types.Capabilities
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index 7575d326..8e073339 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -1806,9 +1806,9 @@ func (k *kataAgent) memHotplugByProbe(addr uint64, sizeMB uint32, memorySectionS
+ 	return err
+ }
+ 
+-func (k *kataAgent) onlineCPUMem(cpus uint32, cpuOnly bool) error {
++func (k *kataAgent) onlineCPUMem(cpus uint32, cpuOnly bool, wait bool) error {
+ 	req := &grpc.OnlineCPUMemRequest{
+-		Wait:    false,
++		Wait:    wait,
+ 		NbCpus:  cpus,
+ 		CpuOnly: cpuOnly,
+ 	}
+diff --git a/virtcontainers/kata_agent_test.go b/virtcontainers/kata_agent_test.go
+index 62d31c93..2a2ddada 100644
+--- a/virtcontainers/kata_agent_test.go
++++ b/virtcontainers/kata_agent_test.go
+@@ -324,7 +324,7 @@ func TestKataAgentSendReq(t *testing.T) {
+ 	err = k.resumeContainer(sandbox, Container{})
+ 	assert.Nil(err)
+ 
+-	err = k.onlineCPUMem(1, true)
++	err = k.onlineCPUMem(1, true, false)
+ 	assert.Nil(err)
+ 
+ 	_, err = k.statsContainer(sandbox, Container{})
+diff --git a/virtcontainers/mock_hypervisor.go b/virtcontainers/mock_hypervisor.go
+index a5b67491..f1c6106d 100644
+--- a/virtcontainers/mock_hypervisor.go
++++ b/virtcontainers/mock_hypervisor.go
+@@ -128,3 +128,7 @@ func (m *mockHypervisor) check() error {
+ func (m *mockHypervisor) generateSocket(id string, useVsock bool) (interface{}, error) {
+ 	return types.Socket{HostPath: "/tmp/socket", Name: "socket"}, nil
+ }
++
++func (m *mockHypervisor) getMemorySize() uint32 {
++	return 0
++}
+diff --git a/virtcontainers/noop_agent.go b/virtcontainers/noop_agent.go
+index 8a7cd337..6e211bca 100644
+--- a/virtcontainers/noop_agent.go
++++ b/virtcontainers/noop_agent.go
+@@ -102,7 +102,7 @@ func (n *noopAgent) memHotplugByProbe(addr uint64, sizeMB uint32, memorySectionS
+ }
+ 
+ // onlineCPUMem is the Noop agent Container online CPU and Memory implementation. It does nothing.
+-func (n *noopAgent) onlineCPUMem(cpus uint32, cpuOnly bool) error {
++func (n *noopAgent) onlineCPUMem(cpus uint32, cpuOnly bool, wait bool) error {
+ 	return nil
+ }
+ 
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index 4789101d..7bae3278 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -2273,3 +2273,7 @@ func (q *qemu) check() error {
+ func (q *qemu) generateSocket(id string, useVsock bool) (interface{}, error) {
+ 	return generateVMSocket(id, useVsock, q.store.RunVMStoragePath())
+ }
++
++func (q *qemu) getMemorySize() uint32 {
++	return q.config.MemorySize + uint32(q.state.HotpluggedMemory)
++}
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index e766d1f7..a318d677 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -1864,7 +1864,7 @@ func (s *Sandbox) updateResources() error {
+ 	// If the CPUs were increased, ask agent to online them
+ 	if oldCPUs < newCPUs {
+ 		vcpusAdded := newCPUs - oldCPUs
+-		if err := s.agent.onlineCPUMem(vcpusAdded, true); err != nil {
++		if err := s.agent.onlineCPUMem(vcpusAdded, true, false); err != nil {
+ 			return err
+ 		}
+ 	}
+@@ -1872,6 +1872,20 @@ func (s *Sandbox) updateResources() error {
+ 
+ 	// Update Memory
+ 	s.Logger().WithField("memory-sandbox-size-byte", sandboxMemoryByte).Debugf("Request to hypervisor to update memory")
++	reqMemMB := uint32(sandboxMemoryByte >> utils.MibToBytesShift)
++	currentMemMB := s.hypervisor.getMemorySize()
++
++	// If request hotplug memory size larger than utils.MaxHotplugMemMBOnceTime,
++	// inorder to avoid hotplug memory oom problem, we need to hotplug large memory
++	// with two steps. First, hotplug utils.MaxHotplugMemMBOnceTime size memory into
++	// guest and wait all hotplug memory online. Then, hotplug the left unplugged memory
++	// into the guest
++	if currentMemMB < reqMemMB && (reqMemMB-currentMemMB) > utils.MaxHotplugMemMBOnceTime {
++		if err := s.beforeHotplugHugeMem(currentMemMB); err != nil {
++			return err
++		}
++	}
++
+ 	newMemory, updatedMemoryDevice, err := s.hypervisor.resizeMemory(uint32(sandboxMemoryByte>>utils.MibToBytesShift), s.state.GuestMemoryBlockSizeMB, s.state.GuestMemoryHotplugProbe)
+ 	if err != nil {
+ 		return err
+@@ -1884,7 +1898,7 @@ func (s *Sandbox) updateResources() error {
+ 			return err
+ 		}
+ 	}
+-	if err := s.agent.onlineCPUMem(0, false); err != nil {
++	if err := s.agent.onlineCPUMem(0, false, false); err != nil {
+ 		return err
+ 	}
+ 	return nil
+@@ -1926,6 +1940,18 @@ func (s *Sandbox) calculateSandboxCPUs() uint32 {
+ 	return utils.CalculateVCpusFromMilliCpus(mCPU)
+ }
+ 
++func (s *Sandbox) beforeHotplugHugeMem(currentMemSizeInMB uint32) error {
++	wantedTotalMemSize := currentMemSizeInMB + utils.MaxHotplugMemMBOnceTime
++	newMemory, _, err := s.hypervisor.resizeMemory(wantedTotalMemSize, s.state.GuestMemoryBlockSizeMB, s.state.GuestMemoryHotplugProbe)
++	if err != nil {
++		return err
++	}
++
++	s.Logger().Debugf("first part hotplug memory size: %d MB", newMemory)
++	// wait all first part hotplugged memory online in the guest
++	return s.agent.onlineCPUMem(0, false, true)
++}
++
+ // GetHypervisorType is used for getting Hypervisor name currently used.
+ // Sandbox implement DeviceReceiver interface from device/api/interface.go
+ func (s *Sandbox) GetHypervisorType() string {
+diff --git a/virtcontainers/sandbox_test.go b/virtcontainers/sandbox_test.go
+index 85c712e8..4b02b3f3 100644
+--- a/virtcontainers/sandbox_test.go
++++ b/virtcontainers/sandbox_test.go
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/kata-containers/runtime/virtcontainers/persist/fs"
+ 	"github.com/kata-containers/runtime/virtcontainers/pkg/annotations"
+ 	"github.com/kata-containers/runtime/virtcontainers/types"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	specs "github.com/opencontainers/runtime-spec/specs-go"
+ 	"github.com/stretchr/testify/assert"
+ 	"golang.org/x/sys/unix"
+@@ -1522,6 +1523,17 @@ func TestSandboxUpdateResources(t *testing.T) {
+ 	}
+ 	err = s.updateResources()
+ 	assert.NoError(t, err)
++
++	// add a container with huge memory equal utils.MaxHotplugMemMBOnceTime
++	contConfig3 := newTestContainerConfigNoop("cont-00003")
++	contConfig3.Resources.Memory = &specs.LinuxMemory{
++		Limit: new(int64),
++	}
++	container3MemLimitInBytes := int64(utils.MaxHotplugMemMBOnceTime << utils.MibToBytesShift)
++	contConfig3.Resources.Memory.Limit = &container3MemLimitInBytes
++	s.config.Containers = append(s.config.Containers, contConfig3)
++	err = s.updateResources()
++	assert.NoError(t, err)
+ }
+ 
+ func TestSandboxExperimentalFeature(t *testing.T) {
+diff --git a/virtcontainers/utils/utils.go b/virtcontainers/utils/utils.go
+index 2b555ebb..3ae95aef 100644
+--- a/virtcontainers/utils/utils.go
++++ b/virtcontainers/utils/utils.go
+@@ -25,6 +25,9 @@ const fileMode0755 = os.FileMode(0755)
+ // MibToBytesShift the number to shift needed to convert MiB to Bytes
+ const MibToBytesShift = 20
+ 
++// Max Hotplug Memory size at once time, unit is MB
++const MaxHotplugMemMBOnceTime = 32 * 1024
++
+ // MaxSocketPathLen is the effective maximum Unix domain socket length.
+ //
+ // See unix(7).
+diff --git a/virtcontainers/vm.go b/virtcontainers/vm.go
+index 8d27b1fe..2e5fef44 100644
+--- a/virtcontainers/vm.go
++++ b/virtcontainers/vm.go
+@@ -370,7 +370,7 @@ func (v *VM) AddMemory(numMB uint32) error {
+ // OnlineCPUMemory puts the hotplugged CPU and memory online.
+ func (v *VM) OnlineCPUMemory() error {
+ 	v.logger().Infof("online CPU %d and memory", v.cpuDelta)
+-	err := v.agent.onlineCPUMem(v.cpuDelta, false)
++	err := v.agent.onlineCPUMem(v.cpuDelta, false, false)
+ 	if err == nil {
+ 		v.cpuDelta = 0
+ 	}
+-- 
+2.14.3 (Apple Git-98)
+

@@ -1,0 +1,195 @@
+From 79cf2f5a52af51d8a62353a99e894808281769e2 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 10 Aug 2020 11:25:02 +0800
+Subject: [PATCH 21/50] kata-runtime: add sandbox_cpu and sandbox_mem
+ annotations
+
+reason: add sandbox_cpu and sandbox_men annotations to set
+Kata VM vCPU number and memory size.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/pkg/annotations/annotations.go |  6 +++++
+ virtcontainers/pkg/oci/utils.go               | 39 +++++++++++++++++++++++++--
+ virtcontainers/sandbox.go                     | 32 ++++++++++++++++++++++
+ virtcontainers/utils/utils.go                 | 14 ++++++++++
+ 4 files changed, 89 insertions(+), 2 deletions(-)
+
+diff --git a/virtcontainers/pkg/annotations/annotations.go b/virtcontainers/pkg/annotations/annotations.go
+index 10ce7833..903c7f03 100644
+--- a/virtcontainers/pkg/annotations/annotations.go
++++ b/virtcontainers/pkg/annotations/annotations.go
+@@ -251,6 +251,12 @@ const (
+ 	ContainerPipeSizeKernelParam = "agent." + ContainerPipeSizeOption
+ )
+ 
++// iSula self defined annotations
++const (
++	StaticCPUTypeKey = kataAnnotationsPrefix + "sandbox_cpu"
++	StaticMemTypeKey = kataAnnotationsPrefix + "sandbox_mem"
++)
++
+ const (
+ 	// SHA512 is the SHA-512 (64) hash algorithm
+ 	SHA512 string = "sha512"
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index 0a6f08c7..36c730b7 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -16,6 +16,7 @@ import (
+ 
+ 	criContainerdAnnotations "github.com/containerd/cri-containerd/pkg/annotations"
+ 	crioAnnotations "github.com/cri-o/cri-o/pkg/annotations"
++	"github.com/docker/go-units"
+ 	vc "github.com/kata-containers/runtime/virtcontainers"
+ 	"github.com/kata-containers/runtime/virtcontainers/device/config"
+ 	exp "github.com/kata-containers/runtime/virtcontainers/experimental"
+@@ -34,7 +35,10 @@ type annotationContainerType struct {
+ 
+ type annotationHandler func(value string) error
+ 
+-var annotationHandlerList = map[string]annotationHandler{}
++var annotationHandlerList = map[string]annotationHandler{
++	vcAnnotations.StaticCPUTypeKey: validateSandboxCPU,
++	vcAnnotations.StaticMemTypeKey: validateSandboxMem,
++}
+ 
+ var (
+ 	// ErrNoLinux is an error for missing Linux sections in the OCI configuration file.
+@@ -1036,7 +1040,10 @@ func validateOtherSandboxAnnotations(annotation, value string) error {
+ 
+ // addOtherSandboxAnnotation add self defined annotation for sandbox
+ func addOtherSandboxAnnotation(ocispec specs.Spec, sbConfig *vc.SandboxConfig) error {
+-	otherSandboxAnnotationsKey := []string{}
++	otherSandboxAnnotationsKey := []string{
++		vcAnnotations.StaticCPUTypeKey,
++		vcAnnotations.StaticMemTypeKey,
++	}
+ 
+ 	for _, a := range otherSandboxAnnotationsKey {
+ 		value, ok := ocispec.Annotations[a]
+@@ -1053,3 +1060,31 @@ func addOtherSandboxAnnotation(ocispec specs.Spec, sbConfig *vc.SandboxConfig) e
+ 
+ 	return nil
+ }
++
++func validateSandboxCPU(value string) error {
++	// check min cpu value
++	cpus, err := utils.RoundVCPUNumber(value)
++	if err != nil {
++		return fmt.Errorf("valiate sandbox_cpu annotation fail: %v", err)
++	}
++
++	maxPhysicalCPUs := utils.GetPhysicalCPUNumber()
++	if cpus > maxPhysicalCPUs {
++		return fmt.Errorf("sandbox_cpu annotation value exceed the machine max CPU number: %d", cpus)
++	}
++
++	return nil
++}
++
++func validateSandboxMem(value string) error {
++	memSizeInBytes, err := units.RAMInBytes(value)
++	if err != nil {
++		return fmt.Errorf("parse sandbox_mem value: %d fail: %v", memSizeInBytes, err)
++	}
++
++	if memSizeInBytes < utils.MinMemorySizeInByte || memSizeInBytes > utils.MaxMemorySizeInByte {
++		return fmt.Errorf("invalid sandbox_mem value size in bytes: %v", memSizeInBytes)
++	}
++
++	return nil
++}
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 8fcd92d4..ba704249 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -20,6 +20,7 @@ import (
+ 
+ 	"github.com/containerd/cgroups"
+ 	"github.com/containernetworking/plugins/pkg/ns"
++	"github.com/docker/go-units"
+ 	"github.com/kata-containers/agent/protocols/grpc"
+ 	"github.com/kata-containers/runtime/virtcontainers/device/api"
+ 	"github.com/kata-containers/runtime/virtcontainers/device/config"
+@@ -479,6 +480,10 @@ func createSandbox(ctx context.Context, sandboxConfig SandboxConfig, factory Fac
+ 		return nil, err
+ 	}
+ 
++	if err := updateStaticSandboxResources(&sandboxConfig); err != nil {
++		return nil, err
++	}
++
+ 	s, err := newSandbox(ctx, sandboxConfig, factory)
+ 	if err != nil {
+ 		return nil, err
+@@ -2359,3 +2364,30 @@ func (s *Sandbox) setContainersState(state types.StateString) error {
+ 
+ 	return nil
+ }
++
++// updateStaticSandboxResources update sandbox's cpu and memory resource passed by
++// sandbox_cpu and sandbox_mem annotations
++func updateStaticSandboxResources(sandboxConfig *SandboxConfig) error {
++	// update cpu resource
++	if cpuNumVal, ok := sandboxConfig.Annotations[annotations.StaticCPUTypeKey]; ok {
++		cpuNum, err := utils.RoundVCPUNumber(cpuNumVal)
++		if err != nil {
++			return err
++		}
++
++		sandboxConfig.HypervisorConfig.NumVCPUs = (uint32)(cpuNum)
++	}
++
++	// update mem resource
++	if memVal, ok := sandboxConfig.Annotations[annotations.StaticMemTypeKey]; ok {
++		memSizeInBytes, err := units.RAMInBytes(memVal)
++		if err != nil {
++			return err
++		}
++
++		memSizeInMB := memSizeInBytes >> utils.MibToBytesShift
++		sandboxConfig.HypervisorConfig.MemorySize = (uint32)(memSizeInMB)
++	}
++
++	return nil
++}
+diff --git a/virtcontainers/utils/utils.go b/virtcontainers/utils/utils.go
+index 5d38e594..9490faa1 100644
+--- a/virtcontainers/utils/utils.go
++++ b/virtcontainers/utils/utils.go
+@@ -11,6 +11,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io/ioutil"
++	"math"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -30,6 +31,9 @@ const MibToBytesShift = 20
+ const MaxHotplugMemMBOnceTime = 32 * 1024
+ 
+ const (
++	// minCPUs is allowed minimum CPU
++	minCPUs = 0.25
++
+ 	// Min needed memory size to start a Kata VM
+ 	MinMemorySizeInMB   = 300
+ 	MinMemorySizeInByte = MinMemorySizeInMB << MibToBytesShift
+@@ -365,3 +369,13 @@ func GetPhysicalCPUNumber() int {
+ 	}
+ 	return cpuNum
+ }
++
++func RoundVCPUNumber(value string) (int, error) {
++	cpuNum, err := strconv.ParseFloat(value, 64)
++	if err != nil || cpuNum < minCPUs {
++		return 0, fmt.Errorf("invalid sandbox cpu number: %v", cpuNum)
++	}
++
++	cpus := int(math.Ceil(cpuNum))
++	return cpus, nil
++}
+-- 
+2.14.3 (Apple Git-98)
+

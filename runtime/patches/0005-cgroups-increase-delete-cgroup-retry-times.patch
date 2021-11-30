@@ -1,0 +1,66 @@
+From c279f4548ccc534f1c65723bf9994c448e510d3d Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sat, 25 Jul 2020 11:56:35 +0800
+Subject: [PATCH 05/50] cgroups: increase delete cgroup retry times
+
+reason: inorder to make sure cgroup dir to be deleted, so we increase
+the retry times when delete cgroup dir failed.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ vendor/github.com/containerd/cgroups/cgroup.go | 4 ++--
+ vendor/github.com/containerd/cgroups/utils.go  | 9 ++++++---
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/vendor/github.com/containerd/cgroups/cgroup.go b/vendor/github.com/containerd/cgroups/cgroup.go
+index 53866685..69612b0a 100644
+--- a/vendor/github.com/containerd/cgroups/cgroup.go
++++ b/vendor/github.com/containerd/cgroups/cgroup.go
+@@ -223,7 +223,7 @@ func (c *cgroup) Delete() error {
+ 				return err
+ 			}
+ 			if err := d.Delete(sp); err != nil {
+-				errors = append(errors, string(s.Name()))
++				errors = append(errors, fmt.Sprintf("delete %s get error: %v", string(s.Name()), err.Error()))
+ 			}
+ 			continue
+ 		}
+@@ -234,7 +234,7 @@ func (c *cgroup) Delete() error {
+ 			}
+ 			path := p.Path(sp)
+ 			if err := remove(path); err != nil {
+-				errors = append(errors, path)
++				errors = append(errors, fmt.Sprintf("remove path %s get error: %v", path, err.Error()))
+ 			}
+ 		}
+ 	}
+diff --git a/vendor/github.com/containerd/cgroups/utils.go b/vendor/github.com/containerd/cgroups/utils.go
+index 8a97d04d..82dbe2d3 100644
+--- a/vendor/github.com/containerd/cgroups/utils.go
++++ b/vendor/github.com/containerd/cgroups/utils.go
+@@ -99,16 +99,19 @@ func defaults(root string) ([]Subsystem, error) {
+ // retrying the remove after a exp timeout
+ func remove(path string) error {
+ 	delay := 10 * time.Millisecond
+-	for i := 0; i < 5; i++ {
++	var err error
++	var count int = 0
++	for i := 0; i < 10; i++ {
+ 		if i != 0 {
+ 			time.Sleep(delay)
+ 			delay *= 2
+ 		}
+-		if err := os.RemoveAll(path); err == nil {
++		if err = os.RemoveAll(path); err == nil {
+ 			return nil
+ 		}
++		count++
+ 	}
+-	return fmt.Errorf("cgroups: unable to remove path %q", path)
++	return fmt.Errorf("cgroups: unable to remove path %q, err: %v, count:%d", path, err, count)
+ }
+ 
+ // readPids will read all the pids of processes in a cgroup by the provided path
+-- 
+2.14.3 (Apple Git-98)
+

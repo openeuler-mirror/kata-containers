@@ -1,0 +1,375 @@
+From dbbf8c5deb14d8033b2e863fb0eb731523af2a47 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 19 Aug 2020 09:58:07 +0800
+Subject: [PATCH 44/50] network: support dpdk vhost_user net device
+
+reason: support dpdk vhost_user net device
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ vendor/github.com/intel/govmm/qemu/qmp.go |  3 +-
+ virtcontainers/hypervisor.go              |  3 ++
+ virtcontainers/network.go                 | 49 ++++++++++++++------
+ virtcontainers/pkg/types/types.go         |  2 +
+ virtcontainers/qemu.go                    | 75 +++++++++++++++++++++++++++++++
+ virtcontainers/sandbox.go                 |  7 ++-
+ virtcontainers/vhostuser_endpoint.go      | 18 ++++++--
+ virtcontainers/vhostuser_endpoint_test.go |  7 ++-
+ 8 files changed, 143 insertions(+), 21 deletions(-)
+
+diff --git a/vendor/github.com/intel/govmm/qemu/qmp.go b/vendor/github.com/intel/govmm/qemu/qmp.go
+index a64039de..0cb82ffa 100644
+--- a/vendor/github.com/intel/govmm/qemu/qmp.go
++++ b/vendor/github.com/intel/govmm/qemu/qmp.go
+@@ -970,11 +970,12 @@ func (q *QMP) ExecuteNetdevAdd(ctx context.Context, netdevType, netdevID, ifname
+ // ExecuteNetdevChardevAdd adds a Net device to a QEMU instance
+ // using the netdev_add command. netdevID is the id of the device to add.
+ // Must be valid QMP identifier.
+-func (q *QMP) ExecuteNetdevChardevAdd(ctx context.Context, netdevType, netdevID, chardev string, queues int) error {
++func (q *QMP) ExecuteNetdevChardevAdd(ctx context.Context, netdevType, netdevID, chardev string, vhostforce bool, queues int) error {
+ 	args := map[string]interface{}{
+ 		"type":    netdevType,
+ 		"id":      netdevID,
+ 		"chardev": chardev,
++		"vhostforce": vhostforce,
+ 	}
+ 	if queues > 1 {
+ 		args["queues"] = queues
+diff --git a/virtcontainers/hypervisor.go b/virtcontainers/hypervisor.go
+index c0723daa..60f1d190 100644
+--- a/virtcontainers/hypervisor.go
++++ b/virtcontainers/hypervisor.go
+@@ -132,6 +132,9 @@ const (
+ 	// vhostuserDev is a Vhost-user device type
+ 	vhostuserDev
+ 
++	// vhostUserNetDev is a Vhost-user net device type
++	vhostUserNetDev
++
+ 	// CPUDevice is CPU device type
+ 	cpuDev
+ 
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index 488bd00c..a0c64356 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -13,6 +13,7 @@ import (
+ 	"math/rand"
+ 	"net"
+ 	"os"
++	"path/filepath"
+ 	"regexp"
+ 	"runtime"
+ 	"sort"
+@@ -65,7 +66,8 @@ const (
+ )
+ 
+ var (
+-	regInfName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_\-.]*$`)
++	regInfName   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_\-.]*$`)
++	regVhostName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9\-.]{0,127}$`)
+ )
+ 
+ //IsValid checks if a model is valid
+@@ -132,11 +134,12 @@ type NetlinkIface struct {
+ // NetworkInfo gathers all information related to a network interface.
+ // It can be used to store the description of the underlying network.
+ type NetworkInfo struct {
+-	Device string
+-	Iface  NetlinkIface
+-	Addrs  []netlink.Addr
+-	Routes []netlink.Route
+-	DNS    DNSInfo
++	Device          string
++	Iface           NetlinkIface
++	Addrs           []netlink.Addr
++	Routes          []netlink.Route
++	DNS             DNSInfo
++	VhostUserSocket string
+ }
+ 
+ // NetworkInterface defines a network interface.
+@@ -1198,15 +1201,11 @@ func createEndpoint(netInfo NetworkInfo, idx int, model NetInterworkingModel, li
+ 		return endpoint, err
+ 	}
+ 
+-	// Check if this is a dummy interface which has a vhost-user socket associated with it
+-	socketPath, err := vhostUserSocketPath(netInfo)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	if socketPath != "" {
++	// Currently, we only accept the vhost-user socket paas from user input
++	// interface info json file
++	if netInfo.VhostUserSocket != "" {
+ 		networkLogger().WithField("interface", netInfo.Iface.Name).Info("VhostUser network interface found")
+-		endpoint, err = createVhostUserEndpoint(netInfo, socketPath)
++		endpoint, err = createVhostUserEndpoint(netInfo, netInfo.VhostUserSocket)
+ 		return endpoint, err
+ 	}
+ 
+@@ -1481,6 +1480,24 @@ func verifyIP(ip string) (*net.IP, error) {
+ 	return &netIP, nil
+ }
+ 
++// verifyVhostSocket verifies the vhost socket is valid or not
++func verifyVhostSocket(vhostSocket string) error {
++	if vhostSocket == "" {
++		networkLogger().Debug("no dpdk network")
++		return nil
++	}
++	if regVhostName.FindAllString(filepath.Base(vhostSocket), -1) == nil {
++		return fmt.Errorf("invalid input of vhostSocket name, please check the rules")
++	}
++	info, err := os.Stat(vhostSocket)
++	if err != nil || info.IsDir() || info.Mode()&os.ModeSocket == 0 {
++		return fmt.Errorf("invalid vhost socket: %v", vhostSocket)
++	}
++
++	networkLogger().WithField("vhostSocket", vhostSocket).Infof("using dpdk network, socket file is: %s ", vhostSocket)
++	return nil
++}
++
+ // validInterface check the input interface valid or not
+ func validInterface(inf *vcTypes.Interface, enableCompatOldCNI bool) error {
+ 	if enableCompatOldCNI && verifyInterfaceName(inf.Device) != nil {
+@@ -1503,6 +1520,10 @@ func validInterface(inf *vcTypes.Interface, enableCompatOldCNI bool) error {
+ 		return err
+ 	}
+ 
++	if err := verifyVhostSocket(inf.VhostUserSocket); err != nil {
++		return err
++	}
++
+ 	// Currently, only one IP address can be passed, which reduces the test entry and fault injection.
+ 	if len(inf.IPAddresses) > 0 {
+ 		if len(inf.IPAddresses) != 1 {
+diff --git a/virtcontainers/pkg/types/types.go b/virtcontainers/pkg/types/types.go
+index b41b0c75..dccd92f8 100644
+--- a/virtcontainers/pkg/types/types.go
++++ b/virtcontainers/pkg/types/types.go
+@@ -29,6 +29,8 @@ type Interface struct {
+ 	// library, regarding each type of link. Here is a non exhaustive
+ 	// list: "veth", "macvtap", "vlan", "macvlan", "tap", ...
+ 	LinkType string `json:"linkType,omitempty"`
++	// VhostUserSocket is DPDK-backed vHost user ports.
++	VhostUserSocket string `json:"vhostUserSocket,omitempty"`
+ }
+ 
+ // Route describes a network route.
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index 657b6be7..84797e0d 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -1279,6 +1279,78 @@ func (q *qemu) hotplugBlockDevice(drive *config.BlockDrive, op operation) error
+ 	return err
+ }
+ 
++func (q *qemu) hotplugVhostUserNetDevice(endpoint Endpoint, op operation) error {
++	err := q.qmpSetup()
++	if err != nil {
++		return err
++	}
++
++	device := endpoint.(*VhostUserEndpoint)
++
++	charDevID := utils.MakeNameID("char", device.ID, maxDevIDSize)
++	devID := utils.MakeNameID("virtio", device.ID, maxDevIDSize)
++
++	if op == addDevice {
++		// Add chardev specifying the appropriate socket.
++		if err = q.qmpMonitorCh.qmp.ExecuteCharDevUnixSocketAdd(q.qmpMonitorCh.ctx, charDevID, device.SocketPath, true, false); err != nil {
++			return err
++		}
++
++		defer func() {
++			if err != nil {
++				errRb := q.qmpMonitorCh.qmp.ExecuteChardevDel(q.qmpMonitorCh.ctx, charDevID)
++				if errRb != nil {
++					q.Logger().Errorf("deletes a net device roll back failed. charDev id:%s", charDevID)
++				}
++			}
++		}()
++
++		netDevType := "vhost-user"
++		// Add netdev of type vhost-user.
++		if err = q.qmpMonitorCh.qmp.ExecuteNetdevChardevAdd(q.qmpMonitorCh.ctx, netDevType, devID, charDevID, true, 0); err != nil {
++			return err
++		}
++
++		defer func() {
++			if err != nil {
++				errRb := q.qmpMonitorCh.qmp.ExecuteNetdevDel(q.qmpMonitorCh.ctx, devID)
++				if errRb != nil {
++					q.Logger().Errorf("deletes a net device roll back failed. netDev id:%s", devID)
++				}
++			}
++		}()
++
++		var addr, bus, pciAddr string
++		addr, bus, pciAddr, err = q.getPciAddress(device.ID, types.PCI)
++		if err != nil {
++			return nil
++		}
++		defer func() {
++			if err != nil {
++				q.putPciAddress(device.ID)
++			}
++		}()
++
++		endpoint.SetPciAddr(pciAddr)
++
++		// Add virtio-net-pci device.
++		err = q.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(q.qmpMonitorCh.ctx, devID, devID, device.HardAddr, addr, bus, romFile, 0, q.arch.runNested())
++		return err
++	}
++
++	if err = q.putPciAddress(device.ID); err != nil {
++		return err
++	}
++	if err = q.qmpMonitorCh.qmp.ExecuteDeviceDel(q.qmpMonitorCh.ctx, devID); err != nil {
++		return err
++	}
++	if err = q.qmpMonitorCh.qmp.ExecuteNetdevDel(q.qmpMonitorCh.ctx, devID); err != nil {
++		return err
++	}
++
++	return nil
++}
++
+ func (q *qemu) hotplugVhostUserDevice(vAttr *config.VhostUserDeviceAttrs, op operation) error {
+ 	err := q.qmpSetup()
+ 	if err != nil {
+@@ -1510,6 +1582,9 @@ func (q *qemu) hotplugDevice(devInfo interface{}, devType deviceType, op operati
+ 	case vhostuserDev:
+ 		vAttr := devInfo.(*config.VhostUserDeviceAttrs)
+ 		return nil, q.hotplugVhostUserDevice(vAttr, op)
++	case vhostUserNetDev:
++		device := devInfo.(Endpoint)
++		return nil, q.hotplugVhostUserNetDevice(device, op)
+ 	default:
+ 		return nil, fmt.Errorf("cannot hotplug device: unsupported device type '%v'", devType)
+ 	}
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 0d599267..e6f155a3 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -946,7 +946,8 @@ func (s *Sandbox) generateNetInfo(inf *vcTypes.Interface) (NetworkInfo, error) {
+ 			},
+ 			Type: inf.LinkType,
+ 		},
+-		Addrs: addrs,
++		Addrs:           addrs,
++		VhostUserSocket: inf.VhostUserSocket,
+ 	}, nil
+ }
+ 
+@@ -961,6 +962,10 @@ func (s *Sandbox) AddInterface(inf *vcTypes.Interface) (grpcIf *vcTypes.Interfac
+ 		if ep.Name() == inf.Name {
+ 			return nil, fmt.Errorf("interface %s is already exist", inf.Name)
+ 		}
++
++		if ep.Properties().VhostUserSocket != "" && inf.VhostUserSocket != "" {
++			return nil, fmt.Errorf("sandbox %s only support one dpdk socket", s.ID())
++		}
+ 	}
+ 
+ 	netInfo, err := s.generateNetInfo(inf)
+diff --git a/virtcontainers/vhostuser_endpoint.go b/virtcontainers/vhostuser_endpoint.go
+index bb4a67be..2fc3d837 100644
+--- a/virtcontainers/vhostuser_endpoint.go
++++ b/virtcontainers/vhostuser_endpoint.go
+@@ -12,6 +12,7 @@ import (
+ 
+ 	"github.com/kata-containers/runtime/virtcontainers/device/config"
+ 	persistapi "github.com/kata-containers/runtime/virtcontainers/persist/api"
++	"github.com/kata-containers/runtime/virtcontainers/pkg/uuid"
+ 	"github.com/kata-containers/runtime/virtcontainers/utils"
+ )
+ 
+@@ -23,6 +24,7 @@ const hostSocketSearchPath = "/tmp/vhostuser_%s/vhu.sock"
+ 
+ // VhostUserEndpoint represents a vhost-user socket based network interface
+ type VhostUserEndpoint struct {
++	ID string
+ 	// Path to the vhost-user socket on the host system
+ 	SocketPath string
+ 	// MAC address of the interface
+@@ -99,18 +101,28 @@ func (endpoint *VhostUserEndpoint) Detach(netNsCreated bool, netNsPath string) e
+ 
+ // HotAttach for vhostuser endpoint not supported yet
+ func (endpoint *VhostUserEndpoint) HotAttach(h hypervisor) error {
+-	return fmt.Errorf("VhostUserEndpoint does not support Hot attach")
++	networkLogger().Debug("Hot attaching vhost-user endpoint")
++	if _, err := h.hotplugAddDevice(endpoint, vhostUserNetDev); err != nil {
++		return err
++	}
++	return nil
+ }
+ 
+ // HotDetach for vhostuser endpoint not supported yet
+ func (endpoint *VhostUserEndpoint) HotDetach(h hypervisor, netNsCreated bool, netNsPath string) error {
+-	return fmt.Errorf("VhostUserEndpoint does not support Hot detach")
++	networkLogger().Debug("Hot detaching vhost-user endpoint")
++	if _, err := h.hotplugRemoveDevice(endpoint, vhostUserNetDev); err != nil {
++		networkLogger().WithError(err).Errorf("Error detach vhostUserSocket")
++		return err
++	}
++	return nil
+ }
+ 
+ // Create a vhostuser endpoint
+ func createVhostUserEndpoint(netInfo NetworkInfo, socket string) (*VhostUserEndpoint, error) {
+-
++	uniqueID := uuid.Generate().String()
+ 	vhostUserEndpoint := &VhostUserEndpoint{
++		ID:           uniqueID,
+ 		SocketPath:   socket,
+ 		HardAddr:     netInfo.Iface.HardwareAddr.String(),
+ 		IfaceName:    netInfo.Iface.Name,
+diff --git a/virtcontainers/vhostuser_endpoint_test.go b/virtcontainers/vhostuser_endpoint_test.go
+index ad013e12..584490cc 100644
+--- a/virtcontainers/vhostuser_endpoint_test.go
++++ b/virtcontainers/vhostuser_endpoint_test.go
+@@ -11,6 +11,7 @@ import (
+ 	"os"
+ 	"testing"
+ 
++	"github.com/kata-containers/runtime/virtcontainers/pkg/uuid"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/vishvananda/netlink"
+ )
+@@ -95,7 +96,7 @@ func TestVhostUserEndpoint_HotAttach(t *testing.T) {
+ 	h := &mockHypervisor{}
+ 
+ 	err := v.HotAttach(h)
+-	assert.Error(err)
++	assert.NoError(err)
+ }
+ 
+ func TestVhostUserEndpoint_HotDetach(t *testing.T) {
+@@ -109,10 +110,11 @@ func TestVhostUserEndpoint_HotDetach(t *testing.T) {
+ 	h := &mockHypervisor{}
+ 
+ 	err := v.HotDetach(h, true, "")
+-	assert.Error(err)
++	assert.NoError(err)
+ }
+ 
+ func TestCreateVhostUserEndpoint(t *testing.T) {
++	uniqueID := uuid.Generate().String()
+ 	macAddr := net.HardwareAddr{0x02, 0x00, 0xCA, 0xFE, 0x00, 0x48}
+ 	ifcName := "vhost-deadbeef"
+ 	socket := "/tmp/vhu_192.168.0.1"
+@@ -128,6 +130,7 @@ func TestCreateVhostUserEndpoint(t *testing.T) {
+ 	}
+ 
+ 	expected := &VhostUserEndpoint{
++		ID:           uniqueID,
+ 		SocketPath:   socket,
+ 		HardAddr:     macAddr.String(),
+ 		IfaceName:    ifcName,
+-- 
+2.14.3 (Apple Git-98)
+

@@ -1,0 +1,54 @@
+From bccda1d208f31eab55863883cf0718d7b4b8deef Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 18 Aug 2020 19:30:42 +0800
+Subject: [PATCH 06/16] agent: make workaround for slow response in aarch64
+
+reason: make workaround for slow response in aarch64
+when hotplug virtio-net-pci device
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ agent.go  |  2 +-
+ device.go | 12 ++++++------
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/agent.go b/agent.go
+index c161e93..e81c2cd 100644
+--- a/agent.go
++++ b/agent.go
+@@ -185,7 +185,7 @@ var logsVSockPort = uint32(0)
+ var debugConsoleVSockPort = uint32(0)
+ 
+ // Timeout waiting for a device to be hotplugged
+-var hotplugTimeout = 3 * time.Second
++var hotplugTimeout = 10 * time.Second
+ 
+ // Specify the log level
+ var logLevel = defaultLogLevel
+diff --git a/device.go b/device.go
+index ec1907e..46a1b96 100644
+--- a/device.go
++++ b/device.go
+@@ -179,13 +179,13 @@ func getPCIDeviceNameImpl(s *sandbox, pciID string) (string, error) {
+ 		return "", err
+ 	}
+ 
+-	fieldLogger := agentLog.WithField("pciAddr", pciAddr)
+-
+ 	// Rescan pci bus if we need to wait for a new pci device
+-	if err = rescanPciBus(); err != nil {
+-		fieldLogger.WithError(err).Error("Failed to scan pci bus")
+-		return "", err
+-	}
++	// FIXME:Comment out this code Temporarily, because once the PCIBus is scanned,
++	// the device hot-plug event is lost
++	//if err = rescanPciBus(); err != nil {
++	//	fieldLogger.WithError(err).Error("Failed to scan pci bus")
++	//	return "", err
++	//}
+ 
+ 	return getDeviceName(s, pciAddr)
+ }
+-- 
+2.14.3 (Apple Git-98)
+

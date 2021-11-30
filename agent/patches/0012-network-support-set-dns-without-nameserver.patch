@@ -1,0 +1,38 @@
+From edb29dfd8f786735763245b3f156b50fd3c1a08e Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Wed, 19 Aug 2020 15:15:31 +0800
+Subject: [PATCH 12/16] network: support set dns without nameserver
+
+reason: when runtime sends dns without nameserver to agent,
+add nameserver before ip address. scenario like annotation
+with dns
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ network.go | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/network.go b/network.go
+index 02e28cb..7046cf8 100644
+--- a/network.go
++++ b/network.go
+@@ -708,6 +708,9 @@ func setupDNS(dns []string) (err error) {
+ 	defer file.Close()
+ 
+ 	for i, line := range dns {
++		if !strings.Contains(line, "nameserver") {
++			line = "nameserver" + " " + line
++		}
+ 		if i == (len(dns) - 1) {
+ 			_, err = file.WriteString(strings.TrimSpace(line))
+ 		} else {
+@@ -761,4 +764,4 @@ func (s *sandbox) handleLocalhost() error {
+ 	}
+ 
+ 	return netlink.LinkSetUp(lo)
+-}
+\ No newline at end of file
++}
+-- 
+2.14.3 (Apple Git-98)
+

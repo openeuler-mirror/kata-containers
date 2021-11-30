@@ -1,0 +1,260 @@
+From be8153f21c0b81d2b194075ecd654501bc708577 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Thu, 13 Aug 2020 18:54:49 +0800
+Subject: [PATCH 25/50] network: keep list-ifaces result compatible with cni
+
+reason: community list-ifaces command will return the all
+interfaces info in the Kata VM, however we may just want
+to get the interfaces that we hotplug, so just return the
+hotplugged interfaces and convert the interface info to
+be compatible with cni.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/network.go                        | 29 ++++++++++++++++++++++-
+ virtcontainers/api.go                 |  4 +++-
+ virtcontainers/endpoint.go            | 44 +++++++++++++++++++++++++++++++++++
+ virtcontainers/network.go             | 27 +++++++++++++++++++++
+ virtcontainers/persist/api/network.go | 24 +++++++++++++++++++
+ virtcontainers/tap_endpoint.go        |  9 +++++++
+ 6 files changed, 135 insertions(+), 2 deletions(-)
+
+diff --git a/cli/network.go b/cli/network.go
+index 7e7791f1..66955725 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -28,6 +28,13 @@ const (
+ 
+ const defaultLinkType = "tap"
+ 
++type compatInterface struct {
++	Name string   `json:"name,omitempty"`
++	Mac  string   `json:"mac,omitempty"`
++	IP   []string `json:"ip,omitempty"`
++	Mtu  int      `json:"mtu,omitempty"`
++}
++
+ var kataNetworkCLICommand = cli.Command{
+ 	Name:  "kata-network",
+ 	Usage: "manage interfaces and routes for container",
+@@ -244,7 +251,8 @@ func networkListCommand(ctx context.Context, containerID string, opType networkT
+ 			kataLog.WithField("existing-interfaces", fmt.Sprintf("%+v", interfaces)).
+ 				WithError(err).Error("list interfaces failed")
+ 		}
+-		json.NewEncoder(file).Encode(interfaces)
++		compatInfs := convertCompatInterfaces(interfaces)
++		json.NewEncoder(file).Encode(compatInfs)
+ 	case routeType:
+ 		var routes []*vcTypes.Route
+ 		routes, err = vci.ListRoutes(ctx, sandboxID)
+@@ -256,3 +264,22 @@ func networkListCommand(ctx context.Context, containerID string, opType networkT
+ 	}
+ 	return err
+ }
++
++func convertCompatInterfaces(interfaces []*vcTypes.Interface) []compatInterface {
++	var infs []compatInterface
++	for _, i := range interfaces {
++		var addrs []string
++		for _, a := range i.IPAddresses {
++			addrs = append(addrs, fmt.Sprintf("%s/%s", a.Address, a.Mask))
++		}
++
++		infs = append(infs, compatInterface{
++			Name: i.Name,
++			Mac:  i.HwAddr,
++			IP:   addrs,
++			Mtu:  int(i.Mtu),
++		})
++	}
++
++	return infs
++}
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index 5e8c9c9e..eb5b4995 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -949,7 +949,9 @@ func ListInterfaces(ctx context.Context, sandboxID string) ([]*vcTypes.Interface
+ 	}
+ 	defer s.releaseStatelessSandbox()
+ 
+-	return s.ListInterfaces()
++	// get interfaces info from persist.json file
++	// instead of by s.ListInterfaces()
++	return convertToCompatInterfaces(&s.networkNS.Endpoints), nil
+ }
+ 
+ // UpdateRoutes is the virtcontainers update routes entry point.
+diff --git a/virtcontainers/endpoint.go b/virtcontainers/endpoint.go
+index 01b5e77f..7efcf49c 100644
+--- a/virtcontainers/endpoint.go
++++ b/virtcontainers/endpoint.go
+@@ -132,6 +132,28 @@ func saveTapIf(tapif *TapInterface) *persistapi.TapInterface {
+ 	}
+ }
+ 
++func saveTapEndpointProperties(networkInfo *NetworkInfo) *persistapi.NetworkProperties {
++	if networkInfo == nil {
++		return nil
++	}
++
++	return &persistapi.NetworkProperties{
++		Device: networkInfo.Device,
++		Iface: persistapi.NetlinkIface{
++			LinkAttrs: networkInfo.Iface.LinkAttrs,
++			Type:      networkInfo.Iface.Type,
++		},
++		Addrs:  networkInfo.Addrs,
++		Routes: networkInfo.Routes,
++		DNS: persistapi.DNSInfo{
++			Servers:  networkInfo.DNS.Servers,
++			Domain:   networkInfo.DNS.Domain,
++			Searches: networkInfo.DNS.Searches,
++			Options:  networkInfo.DNS.Options,
++		},
++	}
++}
++
+ func loadTapIf(tapif *persistapi.TapInterface) *TapInterface {
+ 	if tapif == nil {
+ 		return nil
+@@ -148,6 +170,28 @@ func loadTapIf(tapif *persistapi.TapInterface) *TapInterface {
+ 	}
+ }
+ 
++func loadTapEndpointProperties(endpointProperties *persistapi.NetworkProperties) *NetworkInfo {
++	if endpointProperties == nil {
++		return nil
++	}
++
++	return &NetworkInfo{
++		Device: endpointProperties.Device,
++		Iface: NetlinkIface{
++			LinkAttrs: endpointProperties.Iface.LinkAttrs,
++			Type:      endpointProperties.Iface.Type,
++		},
++		Addrs:  endpointProperties.Addrs,
++		Routes: endpointProperties.Routes,
++		DNS: DNSInfo{
++			Servers:  endpointProperties.DNS.Servers,
++			Domain:   endpointProperties.DNS.Domain,
++			Searches: endpointProperties.DNS.Searches,
++			Options:  endpointProperties.DNS.Options,
++		},
++	}
++}
++
+ func saveNetIfPair(pair *NetworkInterfacePair) *persistapi.NetworkInterfacePair {
+ 	if pair == nil {
+ 		return nil
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index e909a822..bf7f9336 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -1340,3 +1340,30 @@ func (n *Network) Remove(ctx context.Context, ns *NetworkNamespace, hypervisor h
+ 
+ 	return nil
+ }
++
++// convertCompatInterfaces convert Endpoint info to vcTypes.Interface
++func convertToCompatInterfaces(es *[]Endpoint) []*vcTypes.Interface {
++	var infs []*vcTypes.Interface
++	for _, e := range *es {
++		var addrs []*vcTypes.IPAddress
++		for _, a := range e.Properties().Addrs {
++			m, _ := a.Mask.Size()
++			addr := &vcTypes.IPAddress{
++				Address: fmt.Sprintf("%s", a.IP),
++				Mask:    fmt.Sprintf("%d", m),
++			}
++			addrs = append(addrs, addr)
++		}
++		inf := &vcTypes.Interface{
++			LinkType:    string(e.Type()),
++			Name:        e.Name(),
++			Mtu:         uint64(e.Properties().Iface.MTU),
++			HwAddr:      e.HardwareAddr(),
++			IPAddresses: addrs,
++		}
++
++		infs = append(infs, inf)
++	}
++
++	return infs
++}
+diff --git a/virtcontainers/persist/api/network.go b/virtcontainers/persist/api/network.go
+index 69610c67..53c6de44 100644
+--- a/virtcontainers/persist/api/network.go
++++ b/virtcontainers/persist/api/network.go
+@@ -11,6 +11,27 @@ import (
+ )
+ 
+ // ============= sandbox level resources =============
++// DNSInfo describes the DNS setup related to a network interface.
++type DNSInfo struct {
++	Servers  []string
++	Domain   string
++	Searches []string
++	Options  []string
++}
++
++// NetlinkIface describes fully a network interface.
++type NetlinkIface struct {
++	netlink.LinkAttrs
++	Type string
++}
++
++type NetworkProperties struct {
++	Device string
++	Iface  NetlinkIface
++	Addrs  []netlink.Addr
++	Routes []netlink.Route
++	DNS    DNSInfo
++}
+ 
+ type NetworkInterface struct {
+ 	Name     string
+@@ -91,6 +112,9 @@ type NetworkEndpoint struct {
+ 	Tap            *TapEndpoint            `json:",omitempty"`
+ 	IPVlan         *IPVlanEndpoint         `json:",omitempty"`
+ 	Tuntap         *TuntapEndpoint         `json:",omitempty"`
++
++	// store the endpoint properties info
++	EndPointProperties *NetworkProperties `json:",omitempty"`
+ }
+ 
+ // NetworkInfo contains network information of sandbox
+diff --git a/virtcontainers/tap_endpoint.go b/virtcontainers/tap_endpoint.go
+index 7d33d5a2..c897670e 100644
+--- a/virtcontainers/tap_endpoint.go
++++ b/virtcontainers/tap_endpoint.go
+@@ -206,12 +206,15 @@ func unTapNetwork(name string) error {
+ 
+ func (endpoint *TapEndpoint) save() persistapi.NetworkEndpoint {
+ 	tapif := saveTapIf(&endpoint.TapInterface)
++	// save tap endpoint network properties into persist storage
++	properties := saveTapEndpointProperties(&endpoint.EndpointProperties)
+ 
+ 	return persistapi.NetworkEndpoint{
+ 		Type: string(endpoint.Type()),
+ 		Tap: &persistapi.TapEndpoint{
+ 			TapInterface: *tapif,
+ 		},
++		EndPointProperties: properties,
+ 	}
+ }
+ func (endpoint *TapEndpoint) load(s persistapi.NetworkEndpoint) {
+@@ -221,4 +224,10 @@ func (endpoint *TapEndpoint) load(s persistapi.NetworkEndpoint) {
+ 		tapif := loadTapIf(&s.Tap.TapInterface)
+ 		endpoint.TapInterface = *tapif
+ 	}
++
++	if s.EndPointProperties != nil {
++		// restore tap endpoint network properties from persist storage
++		properties := loadTapEndpointProperties(s.EndPointProperties)
++		endpoint.EndpointProperties = *properties
++	}
+ }
+-- 
+2.14.3 (Apple Git-98)
+

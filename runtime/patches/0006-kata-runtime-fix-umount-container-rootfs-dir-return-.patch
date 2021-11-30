@@ -1,0 +1,39 @@
+From 3dc10421f177900c0ee94fc49b32ec66a46d9331 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 27 Jul 2020 19:18:50 +0800
+Subject: [PATCH 06/50] kata-runtime: fix umount container rootfs dir return
+ ivalid argument error
+
+reason: If sandbox hypervisor doesn't use block device driver for hotplugging container
+rootfs block device into guest, kata-runtime will bind mount container rootfs dir to 9p
+kataShared dir. However, container stop() function will always call bindUnmountContainerRootfs
+function no matter block device driver is used or not. So we just need to call
+bindUnmountContainerRootfs only if rootfs is bind mount to guest by 9p.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/container.go | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 9e2d1e94..b42cc6e9 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -1120,8 +1120,12 @@ func (c *Container) stop(force bool) error {
+ 		return err
+ 	}
+ 
+-	if err := bindUnmountContainerRootfs(c.ctx, getMountPath(c.sandbox.id), c.id); err != nil && !force {
+-		return err
++	// umount container rootfs dir only if container use 9p
++	// to bind mount host container rootfs to 9p shared dir
++	if c.state.BlockDeviceID == "" {
++		if err := bindUnmountContainerRootfs(c.ctx, getMountPath(c.sandbox.id), c.id); err != nil && !force {
++			return err
++		}
+ 	}
+ 
+ 	if err := c.detachDevices(); err != nil && !force {
+-- 
+2.14.3 (Apple Git-98)
+

@@ -1,0 +1,37 @@
+From 441d80f55f4dc5efb4c92d91608a3c8db3d087cb Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 28 Jul 2020 21:43:15 +0800
+Subject: [PATCH 12/50] kata-runtime: truncate the log.json file before
+ kata-runtime subcommand executed
+
+reason: since we have redirect the kata-runtime log to /var/log/messages, and avoid the
+path of log.json file to be large in the tmpfs, so we truncate the log.json file every
+time before subcommand is executed.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/main.go | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/cli/main.go b/cli/main.go
+index 1362a8fb..5eb2fb19 100644
+--- a/cli/main.go
++++ b/cli/main.go
+@@ -300,6 +300,14 @@ func beforeSubcommands(c *cli.Context) error {
+ 		ignoreConfigLogs = true
+ 	} else {
+ 		if path := c.GlobalString("log"); path != "" {
++			// since we have redirect the kata-runtime log to /var/log/messages, and avoid the
++			// path of log.json file to be large in the tmpfs, so we truncate the log.json file
++			// every time before subcommand is executed.
++			if path != "/dev/null" && katautils.FileExists(path) {
++				if err := os.Truncate(path, 0); err != nil {
++					return err
++				}
++			}
+ 			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0640)
+ 			if err != nil {
+ 				return err
+-- 
+2.14.3 (Apple Git-98)
+

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [[ -f ./patch_flag ]];then
+    echo "proxy patched!"
+    exit 0
+fi
+
+tar -zxvf proxy-1.11.1.tar.gz
+cp -fr ./proxy-1.11.1/* ./
+rm -rf ./proxy-1.11.1
+cat ./series.conf | while read line
+do
+    if [[ $line == '' || $line =~ ^\s*# ]]; then
+        continue
+    fi
+    echo "====patch $line======"
+    pwd
+    patch -p1 -F1 -s < ./patches/$line
+done
+touch ./patch_flag

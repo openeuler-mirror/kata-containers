@@ -1,0 +1,29 @@
+From 0a4adf4ffafd31820c471353757de2a6e2260e39 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Thu, 18 Mar 2021 15:52:27 +0800
+Subject: [PATCH] kata-shim: modify make flags
+
+reason: modify make flags
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ Makefile | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Makefile b/Makefile
+index 5cba637..b244053 100644
+--- a/Makefile
++++ b/Makefile
+@@ -33,6 +33,9 @@ ifeq ($(STRIP),yes)
+ endif
+ 
+ $(TARGET): $(SOURCES) $(VERSION_FILE)
++	CGO_CFLAGS="-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O2" \
++	CGO_LDFLAGS_ALLOW="-Wl,-z,relro,-z,now" \
++	CGO_LDFLAGS="-Wl,-z,relro,-z,now -Wl,-z,noexecstack" \
+ 	go build $(BUILDFLAGS) -o $@ -ldflags "-X main.version=$(VERSION_COMMIT) $(KATA_LDFLAGS)"
+ 
+ test:
+-- 
+2.25.1
+

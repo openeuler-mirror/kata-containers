@@ -1,0 +1,197 @@
+From 488ebd1f148bc9ddda9376a065d38cbc9bb9a0fe Mon Sep 17 00:00:00 2001
+From: gaohuatao <gaohuatao@huawei.com>
+Date: Wed, 28 Apr 2021 15:31:30 +0800
+Subject: [PATCH] kata shimv2 adapt iSulad and open build flag
+
+Signed-off-by: gaohuatao <gaohuatao@huawei.com>
+---
+ Makefile                                      |  2 +-
+ containerd-shim-v2/container.go               |  9 +++++
+ containerd-shim-v2/service.go                 | 38 +++++++++++++++++++
+ containerd-shim-v2/start.go                   | 10 +++++
+ .../containerd/runtime/v2/shim/shim.go        |  9 ++++-
+ 5 files changed, 65 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index f7a9311..9957db9 100644
+--- a/Makefile
++++ b/Makefile
+@@ -505,7 +505,7 @@ define SHOW_ARCH
+   $(shell printf "\\t%s%s\\\n" "$(1)" $(if $(filter $(ARCH),$(1))," (default)",""))
+ endef
+ 
+-all: runtime netmon
++all: runtime containerd-shim-v2 netmon
+ 
+ # Targets that depend on .git-commit can use $(shell cat .git-commit) to get a
+ # git revision string.  They will only be rebuilt if the revision string
+diff --git a/containerd-shim-v2/container.go b/containerd-shim-v2/container.go
+index 6b5e994..fa7f15b 100644
+--- a/containerd-shim-v2/container.go
++++ b/containerd-shim-v2/container.go
+@@ -6,10 +6,13 @@
+ package containerdshim
+ 
+ import (
++	"os"
++	"path"
+ 	"time"
+ 
+ 	"github.com/containerd/containerd/api/types/task"
+ 	"github.com/containerd/containerd/errdefs"
++	cdshim "github.com/containerd/containerd/runtime/v2/shim"
+ 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
+ 	"github.com/opencontainers/runtime-spec/specs-go"
+ 
+@@ -34,6 +37,8 @@ type container struct {
+ 	status   task.Status
+ 	terminal bool
+ 	mounted  bool
++	exitFifo string
++	exitFd   *os.File
+ }
+ 
+ func newContainer(s *service, r *taskAPI.CreateTaskRequest, containerType vc.ContainerType, spec *specs.Spec, mounted bool) (*container, error) {
+@@ -46,6 +51,9 @@ func newContainer(s *service, r *taskAPI.CreateTaskRequest, containerType vc.Con
+ 		spec = &specs.Spec{}
+ 	}
+ 
++	dir := os.Getenv(cdshim.ExitFifoDir)
++	exitFifo := path.Join(dir, r.ID, exitFifoName)
++
+ 	c := &container{
+ 		s:        s,
+ 		spec:     spec,
+@@ -61,6 +69,7 @@ func newContainer(s *service, r *taskAPI.CreateTaskRequest, containerType vc.Con
+ 		exitIOch: make(chan struct{}),
+ 		exitCh:   make(chan uint32, 1),
+ 		mounted:  mounted,
++		exitFifo: exitFifo,
+ 	}
+ 	return c, nil
+ }
+diff --git a/containerd-shim-v2/service.go b/containerd-shim-v2/service.go
+index 8e9b949..c85eb24 100644
+--- a/containerd-shim-v2/service.go
++++ b/containerd-shim-v2/service.go
+@@ -10,6 +10,7 @@ import (
+ 	"io/ioutil"
+ 	"os"
+ 	sysexec "os/exec"
++	"strconv"
+ 	"sync"
+ 	"syscall"
+ 	"time"
+@@ -48,6 +49,8 @@ const (
+ 	// A time span used to wait for publish a containerd event,
+ 	// once it costs a longer time than timeOut, it will be canceld.
+ 	timeOut = 5 * time.Second
++
++	exitFifoName = "exit_fifo"
+ )
+ 
+ var (
+@@ -883,7 +886,42 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (_ *taskAPI.
+ func (s *service) processExits() {
+ 	for e := range s.ec {
+ 		s.checkProcesses(e)
++
++		if os.Getenv(cdshim.ExitFifoDir) != "" {
++			s.closeExitFifo(e)
++		}
++	}
++}
++
++func (s *service) closeExitFifo(e exit) {
++	if e.execid != "" {
++		// not a container, no need to close exit fifo
++		return
+ 	}
++
++	var ret uint32
++
++	s.mu.Lock()
++	c, err := s.getContainer(e.id)
++	s.mu.Unlock()
++
++	if err != nil {
++		logrus.WithError(err).Errorf("Process container:%v exit fifo failed", e.id)
++		return
++	}
++
++	ret = <-c.exitCh
++	// refill the exitCh with the container process's exit code in case
++	// there were other waits on this process.
++	c.exitCh <- ret
++	exitStr := strconv.FormatUint(uint64(ret), 10)
++
++	_, err = c.exitFd.Write([]byte(exitStr))
++	if err != nil {
++		logrus.WithError(err).Error("write exit fifo failed")
++	}
++
++	c.exitFd.Close()
+ }
+ 
+ func (s *service) checkProcesses(e exit) {
+diff --git a/containerd-shim-v2/start.go b/containerd-shim-v2/start.go
+index 173ca7c..bb3ce1d 100644
+--- a/containerd-shim-v2/start.go
++++ b/containerd-shim-v2/start.go
+@@ -8,8 +8,11 @@ package containerdshim
+ import (
+ 	"context"
+ 	"fmt"
++	"golang.org/x/sys/unix"
++	"os"
+ 
+ 	"github.com/containerd/containerd/api/types/task"
++	cdshim "github.com/containerd/containerd/runtime/v2/shim"
+ 	"github.com/kata-containers/runtime/pkg/katautils"
+ )
+ 
+@@ -53,6 +56,13 @@ func startContainer(ctx context.Context, s *service, c *container) error {
+ 
+ 	c.status = task.StatusRunning
+ 
++	if os.Getenv(cdshim.ExitFifoDir) != "" {
++		c.exitFd, err = os.OpenFile(c.exitFifo, unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
++		if err != nil {
++			return err
++		}
++	}
++
+ 	stdin, stdout, stderr, err := s.sandbox.IOStream(c.id, c.id)
+ 	if err != nil {
+ 		return err
+diff --git a/vendor/github.com/containerd/containerd/runtime/v2/shim/shim.go b/vendor/github.com/containerd/containerd/runtime/v2/shim/shim.go
+index d60d496..8bccfef 100644
+--- a/vendor/github.com/containerd/containerd/runtime/v2/shim/shim.go
++++ b/vendor/github.com/containerd/containerd/runtime/v2/shim/shim.go
+@@ -84,6 +84,8 @@ var (
+ 	action               string
+ )
+ 
++var ExitFifoDir = "EXIT_FIFO_DIR"
++
+ func parseFlags() {
+ 	flag.BoolVar(&debugFlag, "debug", false, "enable debug output in logs")
+ 	flag.StringVar(&namespaceFlag, "namespace", "", "namespace that owns the shim")
+@@ -198,9 +200,12 @@ func run(id string, initFunc Init, config Config) error {
+ 		}
+ 		return nil
+ 	default:
+-		if err := setLogger(ctx, idFlag); err != nil {
+-			return err
++		if os.Getenv("EXIT_FIFO_DIR") == "" {
++			if err := setLogger(ctx, idFlag); err != nil {
++				return err
++			}
+ 		}
++
+ 		client := NewShimClient(ctx, service, signals)
+ 		return client.Serve()
+ 	}
+-- 
+2.20.1
+

@@ -1,0 +1,143 @@
+From c0a33c4584e1fbd9b39ff1ca3ed632efe85de65e Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sun, 2 Aug 2020 15:51:10 +0800
+Subject: [PATCH 15/50] kata-runtime: add reuse hypervisor cpu and memory
+ feature
+
+reason: If default hypervisor cpu and memory is set too large,
+which may waste resource, so we add enable_reuse_cpu_memory
+config in the configuration.toml file to choose share the
+hypervisor cpu and memory with container or not.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/config/configuration-qemu.toml.in |  5 +++++
+ pkg/katautils/config.go               |  2 ++
+ virtcontainers/hypervisor.go          |  3 +++
+ virtcontainers/persist.go             |  2 ++
+ virtcontainers/persist/api/config.go  |  3 +++
+ virtcontainers/sandbox.go             | 22 ++++++++++++++++++----
+ 6 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/cli/config/configuration-qemu.toml.in b/cli/config/configuration-qemu.toml.in
+index 46ce7d9b..82461732 100644
+--- a/cli/config/configuration-qemu.toml.in
++++ b/cli/config/configuration-qemu.toml.in
+@@ -95,6 +95,11 @@ default_memory = @DEFMEMSZ@
+ # Default false
+ #enable_virtio_mem = true
+ 
++# Specifies share hypervisor default cpu and memory resource
++# between hypervisor and container process.
++# Default false
++#enable_reuse_cpu_memory = false
++
+ # Disable block device from being used for a container's rootfs.
+ # In case of a storage driver like devicemapper where a container's 
+ # root file system is backed by a block device, the block device is passed
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index 448d23ac..d1883c94 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -112,6 +112,7 @@ type hypervisor struct {
+ 	MemorySize              uint32   `toml:"default_memory"`
+ 	MemSlots                uint32   `toml:"memory_slots"`
+ 	MemOffset               uint32   `toml:"memory_offset"`
++	EnableCPUMemoryReuse    bool     `toml:"enable_reuse_cpu_memory"`
+ 	DefaultBridges          uint32   `toml:"default_bridges"`
+ 	Msize9p                 uint32   `toml:"msize_9p"`
+ 	PCIeRootPort            uint32   `toml:"pcie_root_port"`
+@@ -640,6 +641,7 @@ func newQemuHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		MemorySize:              h.defaultMemSz(),
+ 		MemSlots:                h.defaultMemSlots(),
+ 		MemOffset:               h.defaultMemOffset(),
++		EnableCPUMemoryReuse:    h.EnableCPUMemoryReuse,
+ 		VirtioMem:               h.VirtioMem,
+ 		EntropySource:           h.GetEntropySource(),
+ 		DefaultBridges:          h.defaultBridges(),
+diff --git a/virtcontainers/hypervisor.go b/virtcontainers/hypervisor.go
+index fd7d1f8e..5f8d24f9 100644
+--- a/virtcontainers/hypervisor.go
++++ b/virtcontainers/hypervisor.go
+@@ -250,6 +250,9 @@ type HypervisorConfig struct {
+ 	// MemOffset specifies memory space for nvdimm device
+ 	MemOffset uint32
+ 
++	// Enable hypervisor cpu and memory resource share with container
++	EnableCPUMemoryReuse bool
++
+ 	// VirtioFSCacheSize is the DAX cache size in MiB
+ 	VirtioFSCacheSize uint32
+ 
+diff --git a/virtcontainers/persist.go b/virtcontainers/persist.go
+index d96a3890..aef4d18d 100644
+--- a/virtcontainers/persist.go
++++ b/virtcontainers/persist.go
+@@ -214,6 +214,7 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 		Msize9p:                 sconfig.HypervisorConfig.Msize9p,
+ 		MemSlots:                sconfig.HypervisorConfig.MemSlots,
+ 		MemOffset:               sconfig.HypervisorConfig.MemOffset,
++		EnableCPUMemoryReuse:    sconfig.HypervisorConfig.EnableCPUMemoryReuse,
+ 		VirtioMem:               sconfig.HypervisorConfig.VirtioMem,
+ 		VirtioFSCacheSize:       sconfig.HypervisorConfig.VirtioFSCacheSize,
+ 		KernelPath:              sconfig.HypervisorConfig.KernelPath,
+@@ -503,6 +504,7 @@ func loadSandboxConfig(id string) (*SandboxConfig, error) {
+ 		Msize9p:                 hconf.Msize9p,
+ 		MemSlots:                hconf.MemSlots,
+ 		MemOffset:               hconf.MemOffset,
++		EnableCPUMemoryReuse:    hconf.EnableCPUMemoryReuse,
+ 		VirtioMem:               hconf.VirtioMem,
+ 		VirtioFSCacheSize:       hconf.VirtioFSCacheSize,
+ 		KernelPath:              hconf.KernelPath,
+diff --git a/virtcontainers/persist/api/config.go b/virtcontainers/persist/api/config.go
+index 34a5fd0f..a3c6ec91 100644
+--- a/virtcontainers/persist/api/config.go
++++ b/virtcontainers/persist/api/config.go
+@@ -35,6 +35,9 @@ type HypervisorConfig struct {
+ 	// MemOffset specifies memory space for nvdimm device
+ 	MemOffset uint32
+ 
++	// Enable hypervisor cpu and memory resource share with container
++	EnableCPUMemoryReuse bool
++
+ 	// VirtioFSCacheSize is the DAX cache size in MiB
+ 	VirtioFSCacheSize uint32
+ 
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 78188ed7..e766d1f7 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -1833,12 +1833,26 @@ func (s *Sandbox) updateResources() error {
+ 	}
+ 
+ 	sandboxVCPUs := s.calculateSandboxCPUs()
+-	// Add default vcpus for sandbox
+-	sandboxVCPUs += s.hypervisor.hypervisorConfig().NumVCPUs
++	// Share the hypervisor vcpu with container process
++	if s.config.HypervisorConfig.EnableCPUMemoryReuse {
++		if sandboxVCPUs <= s.config.HypervisorConfig.NumVCPUs {
++			sandboxVCPUs = s.config.HypervisorConfig.NumVCPUs
++		}
++	} else {
++		// Add default vcpus for sandbox
++		sandboxVCPUs += s.hypervisor.hypervisorConfig().NumVCPUs
++	}
+ 
+ 	sandboxMemoryByte := s.calculateSandboxMemory()
+-	// Add default / rsvd memory for sandbox.
+-	sandboxMemoryByte += int64(s.hypervisor.hypervisorConfig().MemorySize) << utils.MibToBytesShift
++	// Share the hypervisor memory with container process
++	if s.config.HypervisorConfig.EnableCPUMemoryReuse {
++		if sandboxMemoryByte <= (int64(s.config.HypervisorConfig.MemorySize) << utils.MibToBytesShift) {
++			sandboxMemoryByte = int64(s.config.HypervisorConfig.MemorySize) << utils.MibToBytesShift
++		}
++	} else {
++		// Add default / rsvd memory for sandbox.
++		sandboxMemoryByte += int64(s.hypervisor.hypervisorConfig().MemorySize) << utils.MibToBytesShift
++	}
+ 
+ 	// Update VCPUs
+ 	s.Logger().WithField("cpus-sandbox", sandboxVCPUs).Debugf("Request to hypervisor to update vCPUs")
+-- 
+2.14.3 (Apple Git-98)
+

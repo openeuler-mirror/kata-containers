@@ -1,0 +1,192 @@
+From 51a7270987557ab12ea735fc9781725d1ce1b0a6 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 17 Aug 2020 15:36:32 +0800
+Subject: [PATCH 29/50] network: add kata-network del-route subcommand
+
+reason: add kata-network del-route subcommand to delete the
+specified route in the Kata VM, del-route is more efficient
+than the update-routes subcommand.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/network.go            |  24 ++++++++++
+ virtcontainers/network.go | 115 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 139 insertions(+)
+
+diff --git a/cli/network.go b/cli/network.go
+index 2265f54b..046d0ee9 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -45,6 +45,7 @@ var kataNetworkCLICommand = cli.Command{
+ 		updateRoutesCommand,
+ 		listRoutesCommand,
+ 		addRoutesCommand,
++		deleteRoutesCommand,
+ 	},
+ 	Action: func(context *cli.Context) error {
+ 		return cli.ShowSubcommandHelp(context)
+@@ -155,6 +156,29 @@ var addRoutesCommand = cli.Command{
+ 	},
+ }
+ 
++var deleteRoutesCommand = cli.Command{
++	Name:  "del-route",
++	Usage: "delete one route for a container",
++	ArgsUsage: `del-route <container-id> file or - for stdin
++	file or stdin for example:
++	{
++		"dest":"<[<ip>[/mask] | "default" ]>",
++		"gateway":"[ip]",
++		"device":"[tap-name]",
++	}
++	Only destination is required and others are optional,
++	if device is empty, means search every device`,
++	Flags: []cli.Flag{},
++	Action: func(context *cli.Context) error {
++		ctx, err := cliContextToContext(context)
++		if err != nil {
++			return err
++		}
++
++		return networkModifyCommand(ctx, context.Args().First(), context.Args().Get(1), routeType, vcTypes.NetworkOpRemove)
++	},
++}
++
+ var listRoutesCommand = cli.Command{
+ 	Name:      "list-routes",
+ 	Usage:     "list network routes in a container",
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index f3757f84..c7066a11 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -1631,6 +1631,110 @@ func addOneRoute(ns *NetworkNamespace, route *vcTypes.Route) (added *vcTypes.Rou
+ 	return added, nil
+ }
+ 
++func generateRmRoute(route *vcTypes.Route) (r *netlink.Route, err error) {
++	// destination is required and others are optional
++	if route.Dest == "" {
++		return nil, fmt.Errorf("destination must be specified when remove route.")
++	}
++
++	if route.Device != "" {
++		err = verifyInterfaceName(route.Device)
++		if err != nil {
++			return nil, err
++		}
++	}
++
++	r = &netlink.Route{}
++	if route.Dest != "default" {
++		nlIpNet, err := verifyRouteDest(&route.Dest)
++		if err != nil {
++			return nil, err
++		}
++		r.Dst = nlIpNet
++	}
++
++	if route.Gateway != "" {
++		nIP, err := verifyIP(route.Gateway)
++		if err != nil {
++			return nil, err
++		}
++		r.Gw = *nIP
++	}
++
++	if route.Source != "" {
++		nIP, err := verifyIP(route.Source)
++		if err != nil {
++			return nil, err
++		}
++		r.Src = *nIP
++	}
++
++	r.Scope = netlink.Scope(route.Scope)
++
++	return r, nil
++}
++
++// parseToGrpcRoute convert the netlink.Route to vcTypes.Route and deleted route.Dest will
++// be added a prefix "-"
++func parseToGrpcRoute(device string, route *netlink.Route, add bool) (r *vcTypes.Route) {
++	r = &vcTypes.Route{
++		Device: device,
++	}
++	if route.Dst != nil && route.Dst.String() != "<nil>" {
++		r.Dest = route.Dst.String()
++		if add == false {
++			r.Dest = "-" + route.Dst.String()
++		}
++	} else if route.Dst == nil {
++		r.Dest = "default"
++		if add == false {
++			r.Dest = "-default"
++		}
++	}
++	if route.Gw != nil && route.Gw.String() != "<nil>" {
++		r.Gateway = route.Gw.String()
++	}
++
++	return r
++}
++
++func removeRoutes(ns *NetworkNamespace, route *vcTypes.Route) (removed []*vcTypes.Route, err error) {
++	del, err := generateRmRoute(route)
++	if err != nil {
++		return nil, err
++	}
++
++	// remove the lo device related routes
++	if route.Device == localHostDeviceName {
++		removed = append(removed, parseToGrpcRoute(localHostDeviceName, del, false))
++
++		return removed, nil
++	}
++
++	for _, ep := range ns.Endpoints {
++		// if device is empty, means search every device
++		if route.Device != "" && ep.Name() != route.Device {
++			continue
++		}
++
++		netInfo := ep.Properties()
++		for i, exist := range ep.Properties().Routes {
++			if isSameRoute(&exist, del, true) {
++				// need remove
++				netInfo.Routes = append(netInfo.Routes[:i], netInfo.Routes[i+1:]...)
++				ep.SetProperties(netInfo)
++				dev := route.Device
++				if route.Device == "" {
++					dev = netInfo.Iface.Name
++				}
++				removed = append(removed, parseToGrpcRoute(dev, del, false))
++			}
++		}
++	}
++
++	return removed, nil
++}
++
+ func updateRoute(ns *NetworkNamespace, route *vcTypes.Route, op vcTypes.NetworkOp) ([]*vcTypes.Route, error) {
+ 	var updRoutes []*vcTypes.Route
+ 
+@@ -1645,5 +1749,16 @@ func updateRoute(ns *NetworkNamespace, route *vcTypes.Route, op vcTypes.NetworkO
+ 		updRoutes = append(updRoutes, added)
+ 	}
+ 
++	if op == vcTypes.NetworkOpRemove {
++		removed, err := removeRoutes(ns, route)
++		if err != nil {
++			return nil, err
++		}
++		if len(removed) <= 0 {
++			return nil, fmt.Errorf("route of device %s with destination %s is not found", route.Device, route.Dest)
++		}
++		updRoutes = removed
++	}
++
+ 	return updRoutes, nil
+ }
+-- 
+2.14.3 (Apple Git-98)
+

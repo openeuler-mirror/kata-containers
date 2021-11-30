@@ -1,0 +1,489 @@
+From e9c1fb235d0e69d5db72497a8779df707c499d3b Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 19 Aug 2020 20:36:40 +0800
+Subject: [PATCH 46/50] network: support multiqueue when inserting interface
+ dynamically
+
+reason: support multiqueue when inserting interface dynamically
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ .../kata-containers/agent/pkg/types/types.pb.go    | 82 ++++++++++++++++------
+ virtcontainers/bridgedmacvlan_endpoint.go          |  2 +-
+ virtcontainers/ipvlan_endpoint.go                  |  2 +-
+ virtcontainers/kata_agent.go                       |  2 +
+ virtcontainers/network.go                          | 13 ++--
+ virtcontainers/network_test.go                     |  2 +-
+ virtcontainers/pkg/types/types.go                  |  2 +
+ virtcontainers/qemu.go                             | 10 +--
+ virtcontainers/sandbox.go                          |  1 +
+ virtcontainers/tap_endpoint.go                     |  6 +-
+ virtcontainers/tuntap_endpoint.go                  |  4 +-
+ virtcontainers/veth_endpoint.go                    |  4 +-
+ virtcontainers/veth_endpoint_test.go               |  6 +-
+ virtcontainers/vhostuser_endpoint.go               |  4 +-
+ virtcontainers/vhostuser_endpoint_test.go          |  2 +-
+ 15 files changed, 96 insertions(+), 46 deletions(-)
+
+diff --git a/vendor/github.com/kata-containers/agent/pkg/types/types.pb.go b/vendor/github.com/kata-containers/agent/pkg/types/types.pb.go
+index 7ea63e3c..8b7e2a5d 100644
+--- a/vendor/github.com/kata-containers/agent/pkg/types/types.pb.go
++++ b/vendor/github.com/kata-containers/agent/pkg/types/types.pb.go
+@@ -100,6 +100,7 @@ type Interface struct {
+ 	// list: "veth", "macvtap", "vlan", "macvlan", "tap", ...
+ 	Type     string `protobuf:"bytes,7,opt,name=type,proto3" json:"type,omitempty"`
+ 	RawFlags uint32 `protobuf:"varint,8,opt,name=raw_flags,json=rawFlags,proto3" json:"raw_flags,omitempty"`
++	Queues   uint32 `protobuf:"varint,9,opt,name=Queues,proto3" json:"Queues,omitempty"`
+ }
+ 
+ func (m *Interface) Reset()                    { *m = Interface{} }
+@@ -163,6 +164,13 @@ func (m *Interface) GetRawFlags() uint32 {
+ 	return 0
+ }
+ 
++func (m *Interface) GetQueues() uint32 {
++	if m != nil {
++		return m.Queues
++	}
++	return 0
++}
++
+ type Route struct {
+ 	Dest    string `protobuf:"bytes,1,opt,name=dest,proto3" json:"dest,omitempty"`
+ 	Gateway string `protobuf:"bytes,2,opt,name=gateway,proto3" json:"gateway,omitempty"`
+@@ -319,6 +327,11 @@ func (m *Interface) MarshalTo(dAtA []byte) (int, error) {
+ 		i++
+ 		i = encodeVarintTypes(dAtA, i, uint64(m.RawFlags))
+ 	}
++	if m.Queues != 0 {
++		dAtA[i] = 0x48
++		i++
++		i = encodeVarintTypes(dAtA, i, uint64(m.Queues))
++	}
+ 	return i, nil
+ }
+ 
+@@ -430,6 +443,9 @@ func (m *Interface) Size() (n int) {
+ 	if m.RawFlags != 0 {
+ 		n += 1 + sovTypes(uint64(m.RawFlags))
+ 	}
++	if m.Queues != 0 {
++		n += 1 + sovTypes(uint64(m.Queues))
++	}
+ 	return n
+ }
+ 
+@@ -841,6 +857,25 @@ func (m *Interface) Unmarshal(dAtA []byte) error {
+ 					break
+ 				}
+ 			}
++		case 9:
++			if wireType != 0 {
++				return fmt.Errorf("proto: wrong wireType = %d for field Queues", wireType)
++			}
++			m.Queues = 0
++			for shift := uint(0); ; shift += 7 {
++				if shift >= 64 {
++					return ErrIntOverflowTypes
++				}
++				if iNdEx >= l {
++					return io.ErrUnexpectedEOF
++				}
++				b := dAtA[iNdEx]
++				iNdEx++
++				m.Queues |= (uint32(b) & 0x7F) << shift
++				if b < 0x80 {
++					break
++				}
++			}
+ 		default:
+ 			iNdEx = preIndex
+ 			skippy, err := skipTypes(dAtA[iNdEx:])
+@@ -1155,27 +1190,28 @@ var (
+ func init() { proto.RegisterFile("pkg/types/types.proto", fileDescriptorTypes) }
+ 
+ var fileDescriptorTypes = []byte{
+-	// 345 bytes of a gzipped FileDescriptorProto
+-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x54, 0x91, 0xd1, 0x6a, 0xfa, 0x30,
+-	0x14, 0xc6, 0xff, 0xb1, 0xb6, 0xda, 0xe3, 0xdf, 0xad, 0x84, 0x4d, 0xc2, 0x06, 0x52, 0xbc, 0x59,
+-	0xd9, 0x85, 0x03, 0x37, 0x76, 0xbf, 0x5d, 0x08, 0xde, 0x49, 0x5e, 0x60, 0xc4, 0x36, 0x3a, 0xd1,
+-	0xda, 0xd2, 0x44, 0x8b, 0xec, 0x05, 0x77, 0xb9, 0x47, 0x10, 0x9f, 0x64, 0xe4, 0x24, 0x8a, 0xbb,
+-	0xd1, 0xef, 0x97, 0x93, 0xd3, 0xef, 0x7c, 0x27, 0x70, 0x5b, 0xae, 0x16, 0x4f, 0x7a, 0x5f, 0x4a,
+-	0x65, 0x7f, 0x87, 0x65, 0x55, 0xe8, 0x82, 0xfa, 0x08, 0x83, 0x19, 0x84, 0x93, 0xe9, 0x5b, 0x96,
+-	0x55, 0x52, 0x29, 0xfa, 0x00, 0xc1, 0x5c, 0xe4, 0xcb, 0xf5, 0x9e, 0x91, 0x98, 0x24, 0x57, 0xa3,
+-	0xeb, 0xa1, 0xed, 0x98, 0x4c, 0xc7, 0x78, 0xcc, 0x5d, 0x99, 0x32, 0x68, 0x09, 0xdb, 0xc3, 0x1a,
+-	0x31, 0x49, 0x42, 0x7e, 0x42, 0x4a, 0xa1, 0x99, 0x0b, 0xb5, 0x62, 0x1e, 0x1e, 0xa3, 0x1e, 0x1c,
+-	0x08, 0x84, 0x93, 0x8d, 0x96, 0xd5, 0x5c, 0xa4, 0x92, 0xf6, 0x20, 0xc8, 0xe4, 0x6e, 0x99, 0x4a,
+-	0x34, 0x09, 0xb9, 0x23, 0xd3, 0xb9, 0x11, 0xb9, 0x74, 0x1f, 0x44, 0x4d, 0x47, 0xd0, 0x39, 0x4f,
+-	0x27, 0x15, 0xf3, 0x62, 0x2f, 0xe9, 0x8c, 0xa2, 0xf3, 0x54, 0xae, 0xc2, 0x2f, 0x2f, 0xd1, 0x08,
+-	0xbc, 0x5c, 0x6f, 0x59, 0x33, 0x26, 0x49, 0x93, 0x1b, 0x69, 0x1c, 0x3f, 0x6b, 0x73, 0x81, 0xf9,
+-	0xd6, 0xd1, 0x92, 0x49, 0x51, 0xa6, 0x4b, 0x2c, 0x04, 0x36, 0x85, 0x43, 0x33, 0x8b, 0xf1, 0x60,
+-	0x2d, 0x3b, 0x8b, 0xd1, 0xf4, 0x1e, 0xc2, 0x4a, 0xd4, 0x1f, 0xf3, 0xb5, 0x58, 0x28, 0xd6, 0x8e,
+-	0x49, 0xd2, 0xe5, 0xed, 0x4a, 0xd4, 0x63, 0xc3, 0x83, 0x2f, 0xf0, 0x79, 0xb1, 0xd5, 0x98, 0x22,
+-	0x93, 0x4a, 0xbb, 0x6c, 0xa8, 0x8d, 0xcf, 0x42, 0x68, 0x59, 0x8b, 0xfd, 0x69, 0x5b, 0x0e, 0x2f,
+-	0x76, 0xe1, 0xfd, 0xd9, 0x45, 0x0f, 0x02, 0x55, 0x6c, 0xab, 0x54, 0x62, 0x8c, 0x90, 0x3b, 0xa2,
+-	0x37, 0xe0, 0xab, 0xb4, 0x28, 0x25, 0x06, 0xe9, 0x72, 0x0b, 0x8f, 0x77, 0xd0, 0x3e, 0xbd, 0x10,
+-	0x0d, 0xa0, 0xb1, 0x7b, 0x89, 0xfe, 0xe1, 0xff, 0x6b, 0x44, 0xde, 0xff, 0x7f, 0x1f, 0xfb, 0xe4,
+-	0xe7, 0xd8, 0x27, 0x87, 0x63, 0x9f, 0xcc, 0x02, 0x7c, 0xfb, 0xe7, 0xdf, 0x00, 0x00, 0x00, 0xff,
+-	0xff, 0xb5, 0x52, 0x37, 0xf2, 0x14, 0x02, 0x00, 0x00,
++	// 356 bytes of a gzipped FileDescriptorProto
++	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x54, 0x92, 0xc1, 0x4e, 0xc2, 0x40,
++	0x10, 0x86, 0x5d, 0x4a, 0x0b, 0x1d, 0x44, 0x9b, 0x8d, 0x92, 0x8d, 0x26, 0xa4, 0xe1, 0x62, 0xe3,
++	0x01, 0x13, 0x34, 0xde, 0xf5, 0x40, 0xc2, 0x0d, 0xf7, 0x05, 0xcc, 0xd2, 0x2e, 0x48, 0xa0, 0xb4,
++	0xe9, 0xb6, 0x34, 0xc4, 0x17, 0xf4, 0xe8, 0x23, 0x18, 0x9e, 0xc2, 0xa3, 0xd9, 0xd9, 0x85, 0xe0,
++	0x05, 0xfe, 0x6f, 0x67, 0xa7, 0xff, 0xfc, 0xd3, 0xc2, 0x75, 0xbe, 0x5a, 0x3c, 0x94, 0xbb, 0x5c,
++	0x2a, 0xf3, 0x3b, 0xcc, 0x8b, 0xac, 0xcc, 0xa8, 0x8b, 0x30, 0x98, 0x81, 0x3f, 0x99, 0xbe, 0x24,
++	0x49, 0x21, 0x95, 0xa2, 0x77, 0xe0, 0xcd, 0x45, 0xba, 0x5c, 0xef, 0x18, 0x09, 0x49, 0x74, 0x31,
++	0xba, 0x1c, 0x9a, 0x8e, 0xc9, 0x74, 0x8c, 0xc7, 0xdc, 0x96, 0x29, 0x83, 0x96, 0x30, 0x3d, 0xac,
++	0x11, 0x92, 0xc8, 0xe7, 0x07, 0xa4, 0x14, 0x9a, 0xa9, 0x50, 0x2b, 0xe6, 0xe0, 0x31, 0xea, 0xc1,
++	0x2f, 0x01, 0x7f, 0xb2, 0x29, 0x65, 0x31, 0x17, 0xb1, 0xa4, 0x3d, 0xf0, 0x12, 0xb9, 0x5d, 0xc6,
++	0x12, 0x4d, 0x7c, 0x6e, 0x49, 0x77, 0x6e, 0x44, 0x2a, 0xed, 0x03, 0x51, 0xd3, 0x11, 0x74, 0x8e,
++	0xd3, 0x49, 0xc5, 0x9c, 0xd0, 0x89, 0x3a, 0xa3, 0xe0, 0x38, 0x95, 0xad, 0xf0, 0xd3, 0x4b, 0x34,
++	0x00, 0x27, 0x2d, 0x2b, 0xd6, 0x0c, 0x49, 0xd4, 0xe4, 0x5a, 0x6a, 0xc7, 0x8f, 0x5a, 0x5f, 0x60,
++	0xae, 0x71, 0x34, 0xa4, 0x53, 0xe4, 0xf1, 0x12, 0x0b, 0x9e, 0x49, 0x61, 0x51, 0xcf, 0xa2, 0x3d,
++	0x58, 0xcb, 0xcc, 0xa2, 0x35, 0xbd, 0x05, 0xbf, 0x10, 0xf5, 0xfb, 0x7c, 0x2d, 0x16, 0x8a, 0xb5,
++	0x43, 0x12, 0x75, 0x79, 0xbb, 0x10, 0xf5, 0x58, 0xb3, 0xb6, 0x78, 0xab, 0x64, 0x25, 0x15, 0xf3,
++	0xb1, 0x62, 0x69, 0xf0, 0x09, 0x2e, 0xcf, 0xaa, 0x12, 0xd3, 0x25, 0x52, 0x95, 0x36, 0x33, 0x6a,
++	0xed, 0xbf, 0x10, 0xa5, 0xac, 0xc5, 0xee, 0xb0, 0x45, 0x8b, 0x27, 0x3b, 0x72, 0xfe, 0xed, 0xa8,
++	0x07, 0x9e, 0xca, 0xaa, 0x22, 0x96, 0x18, 0xcf, 0xe7, 0x96, 0xe8, 0x15, 0xb8, 0x2a, 0xce, 0x72,
++	0x89, 0x01, 0xbb, 0xdc, 0xc0, 0xfd, 0x0d, 0xb4, 0x0f, 0x6f, 0x8e, 0x7a, 0xd0, 0xd8, 0x3e, 0x05,
++	0x67, 0xf8, 0xff, 0x1c, 0x90, 0xd7, 0xf3, 0xaf, 0x7d, 0x9f, 0x7c, 0xef, 0xfb, 0xe4, 0x67, 0xdf,
++	0x27, 0x33, 0x0f, 0xbf, 0x89, 0xc7, 0xbf, 0x00, 0x00, 0x00, 0xff, 0xff, 0xa5, 0x57, 0x70, 0xc8,
++	0x2c, 0x02, 0x00, 0x00,
+ }
+diff --git a/virtcontainers/bridgedmacvlan_endpoint.go b/virtcontainers/bridgedmacvlan_endpoint.go
+index 700aea34..9179bbbe 100644
+--- a/virtcontainers/bridgedmacvlan_endpoint.go
++++ b/virtcontainers/bridgedmacvlan_endpoint.go
+@@ -25,7 +25,7 @@ func createBridgedMacvlanNetworkEndpoint(idx int, ifName string, interworkingMod
+ 		return &BridgedMacvlanEndpoint{}, fmt.Errorf("invalid network endpoint index: %d", idx)
+ 	}
+ 
+-	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel)
++	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel, 0)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/virtcontainers/ipvlan_endpoint.go b/virtcontainers/ipvlan_endpoint.go
+index 6e924a74..a6ef8179 100644
+--- a/virtcontainers/ipvlan_endpoint.go
++++ b/virtcontainers/ipvlan_endpoint.go
+@@ -28,7 +28,7 @@ func createIPVlanNetworkEndpoint(idx int, ifName string) (*IPVlanEndpoint, error
+ 	// Use tc filtering for ipvlan, since the other inter networking models will
+ 	// not work for ipvlan.
+ 	interworkingModel := NetXConnectTCFilterModel
+-	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel)
++	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel, 0)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index d28d8cce..38e9a204 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -621,6 +621,7 @@ func (k *kataAgent) updateInterface(ifc *vcTypes.Interface) (*vcTypes.Interface,
+ 			Mtu:         resultInterface.Mtu,
+ 			HwAddr:      resultInterface.HwAddr,
+ 			PciAddr:     resultInterface.PciAddr,
++			Queues:      resultInterface.Queues,
+ 		}
+ 		return iface, err
+ 	}
+@@ -2295,6 +2296,7 @@ func (k *kataAgent) convertToKataAgentInterface(iface *vcTypes.Interface) *aType
+ 		RawFlags:    iface.RawFlags,
+ 		HwAddr:      iface.HwAddr,
+ 		PciAddr:     iface.PciAddr,
++		Queues:      iface.Queues,
+ 	}
+ }
+ 
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index 46703656..15eb7906 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -140,6 +140,7 @@ type NetworkInfo struct {
+ 	Routes          []netlink.Route
+ 	DNS             DNSInfo
+ 	VhostUserSocket string
++	Queues          uint32
+ }
+ 
+ // NetworkInterface defines a network interface.
+@@ -156,6 +157,7 @@ type TapInterface struct {
+ 	TAPIface NetworkInterface
+ 	VMFds    []*os.File
+ 	VhostFds []*os.File
++	Queues   uint32
+ }
+ 
+ // TuntapInterface defines a tap interface
+@@ -1047,7 +1049,7 @@ func generateInterfacesAndRoutes(networkNS NetworkNamespace) ([]*vcTypes.Interfa
+ 	return ifaces, routes, nil
+ }
+ 
+-func createNetworkInterfacePair(idx int, ifName string, interworkingModel NetInterworkingModel) (NetworkInterfacePair, error) {
++func createNetworkInterfacePair(idx int, ifName string, interworkingModel NetInterworkingModel, queues uint32) (NetworkInterfacePair, error) {
+ 	uniqueID := uuid.Generate().String()
+ 
+ 	randomMacAddr, err := generateRandomPrivateMacAddr()
+@@ -1062,6 +1064,7 @@ func createNetworkInterfacePair(idx int, ifName string, interworkingModel NetInt
+ 			TAPIface: NetworkInterface{
+ 				Name: fmt.Sprintf("tap%d_kata", idx),
+ 			},
++			Queues: queues,
+ 		},
+ 		VirtIface: NetworkInterface{
+ 			Name:     fmt.Sprintf("eth%d", idx),
+@@ -1205,7 +1208,7 @@ func createEndpoint(netInfo NetworkInfo, idx int, model NetInterworkingModel, li
+ 	// interface info json file
+ 	if netInfo.VhostUserSocket != "" {
+ 		networkLogger().WithField("interface", netInfo.Iface.Name).Info("VhostUser network interface found")
+-		endpoint, err = createVhostUserEndpoint(netInfo, netInfo.VhostUserSocket)
++		endpoint, err = createVhostUserEndpoint(netInfo, netInfo.VhostUserSocket, netInfo.Queues)
+ 		return endpoint, err
+ 	}
+ 
+@@ -1220,7 +1223,7 @@ func createEndpoint(netInfo NetworkInfo, idx int, model NetInterworkingModel, li
+ 		endpoint, err = createMacvtapNetworkEndpoint(netInfo)
+ 	case "tap":
+ 		networkLogger().Info("tap interface found")
+-		endpoint, err = createTapNetworkEndpoint(idx, netInfo.Iface.Name, netInfo.Device)
++		endpoint, err = createTapNetworkEndpoint(idx, netInfo.Iface.Name, netInfo.Device, netInfo.Queues)
+ 	case "tuntap":
+ 		if link != nil {
+ 			switch link.(*netlink.Tuntap).Mode {
+@@ -1231,13 +1234,13 @@ func createEndpoint(netInfo NetworkInfo, idx int, model NetInterworkingModel, li
+ 				return nil, fmt.Errorf("tun networking device not yet supported")
+ 			case 2:
+ 				networkLogger().Info("tuntap tap interface found")
+-				endpoint, err = createTuntapNetworkEndpoint(idx, netInfo.Iface.Name, netInfo.Iface.HardwareAddr, model)
++				endpoint, err = createTuntapNetworkEndpoint(idx, netInfo.Iface.Name, netInfo.Iface.HardwareAddr, model, netInfo.Queues)
+ 			default:
+ 				return nil, fmt.Errorf("tuntap network %v mode unsupported", link.(*netlink.Tuntap).Mode)
+ 			}
+ 		}
+ 	case "veth":
+-		endpoint, err = createVethNetworkEndpoint(idx, netInfo.Iface.Name, model)
++		endpoint, err = createVethNetworkEndpoint(idx, netInfo.Iface.Name, model, netInfo.Queues)
+ 	case "ipvlan":
+ 		endpoint, err = createIPVlanNetworkEndpoint(idx, netInfo.Iface.Name)
+ 	default:
+diff --git a/virtcontainers/network_test.go b/virtcontainers/network_test.go
+index b86f679f..c52c7452 100644
+--- a/virtcontainers/network_test.go
++++ b/virtcontainers/network_test.go
+@@ -265,7 +265,7 @@ func TestTcRedirectNetwork(t *testing.T) {
+ 	err = netlink.LinkAdd(veth)
+ 	assert.NoError(err)
+ 
+-	endpoint, err := createVethNetworkEndpoint(1, vethName, NetXConnectTCFilterModel)
++	endpoint, err := createVethNetworkEndpoint(1, vethName, NetXConnectTCFilterModel, 0)
+ 	assert.NoError(err)
+ 
+ 	link, err := netlink.LinkByName(vethName)
+diff --git a/virtcontainers/pkg/types/types.go b/virtcontainers/pkg/types/types.go
+index dccd92f8..6502259b 100644
+--- a/virtcontainers/pkg/types/types.go
++++ b/virtcontainers/pkg/types/types.go
+@@ -31,6 +31,8 @@ type Interface struct {
+ 	LinkType string `json:"linkType,omitempty"`
+ 	// VhostUserSocket is DPDK-backed vHost user ports.
+ 	VhostUserSocket string `json:"vhostUserSocket,omitempty"`
++	// Queues specifies the interface queue number
++	Queues uint32 `json:"queues,omitempty"`
+ }
+ 
+ // Route describes a network route.
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index 84797e0d..be6e33b9 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -1464,7 +1464,7 @@ func (q *qemu) hotplugVFIODevice(device *config.VFIODev, op operation) (err erro
+ 	return nil
+ }
+ 
+-func (q *qemu) hotAddNetDevice(deviceName, name, hardAddr string, VMFds, VhostFds []*os.File) error {
++func (q *qemu) hotAddNetDevice(deviceName, name, hardAddr string, VMFds, VhostFds []*os.File, queues uint32) error {
+ 	var (
+ 		VMFdNames    []string
+ 		VhostFdNames []string
+@@ -1489,7 +1489,7 @@ func (q *qemu) hotAddNetDevice(deviceName, name, hardAddr string, VMFds, VhostFd
+ 		return q.qmpMonitorCh.qmp.ExecuteNetdevAddByFds(q.qmpMonitorCh.ctx, "tap", name, VMFdNames, VhostFdNames)
+ 	}
+ 
+-	return q.qmpMonitorCh.qmp.ExecuteNetdevAdd(q.qmpMonitorCh.ctx, "tap", name, deviceName, "no", "no", 0)
++	return q.qmpMonitorCh.qmp.ExecuteNetdevAdd(q.qmpMonitorCh.ctx, "tap", name, deviceName, "no", "no", int(queues))
+ }
+ 
+ func (q *qemu) hotplugNetDevice(endpoint Endpoint, op operation) (err error) {
+@@ -1512,7 +1512,7 @@ func (q *qemu) hotplugNetDevice(endpoint Endpoint, op operation) (err error) {
+ 
+ 	devID := "virtio-" + tap.ID
+ 	if op == addDevice {
+-		if err = q.hotAddNetDevice(tap.TAPIface.Name, tap.Name, endpoint.HardwareAddr(), tap.VMFds, tap.VhostFds); err != nil {
++		if err = q.hotAddNetDevice(tap.TAPIface.Name, tap.Name, endpoint.HardwareAddr(), tap.VMFds, tap.VhostFds, tap.Queues); err != nil {
+ 			return err
+ 		}
+ 
+@@ -1542,9 +1542,9 @@ func (q *qemu) hotplugNetDevice(endpoint Endpoint, op operation) (err error) {
+ 		}
+ 		if machine.Type == QemuCCWVirtio {
+ 			devNoHotplug := fmt.Sprintf("fe.%x.%x", bus, addr)
+-			return q.qmpMonitorCh.qmp.ExecuteNetCCWDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), devNoHotplug, int(q.config.NumVCPUs))
++			return q.qmpMonitorCh.qmp.ExecuteNetCCWDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), devNoHotplug, int(tap.Queues))
+ 		}
+-		return q.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), addr, bus, romFile, int(q.config.NumVCPUs), defaultDisableModern)
++		return q.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(q.qmpMonitorCh.ctx, tap.Name, devID, endpoint.HardwareAddr(), addr, bus, romFile, int(tap.Queues), defaultDisableModern)
+ 
+ 	}
+ 
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index e6f155a3..d8ab6c1a 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -948,6 +948,7 @@ func (s *Sandbox) generateNetInfo(inf *vcTypes.Interface) (NetworkInfo, error) {
+ 		},
+ 		Addrs:           addrs,
+ 		VhostUserSocket: inf.VhostUserSocket,
++		Queues:          inf.Queues,
+ 	}, nil
+ }
+ 
+diff --git a/virtcontainers/tap_endpoint.go b/virtcontainers/tap_endpoint.go
+index 2cf70dce..5a3e7f7e 100644
+--- a/virtcontainers/tap_endpoint.go
++++ b/virtcontainers/tap_endpoint.go
+@@ -115,7 +115,7 @@ func (endpoint *TapEndpoint) HotDetach(h hypervisor, netNsCreated bool, netNsPat
+ 	return nil
+ }
+ 
+-func createTapNetworkEndpoint(idx int, ifName string, tapIfName string) (*TapEndpoint, error) {
++func createTapNetworkEndpoint(idx int, ifName string, tapIfName string, queues uint32) (*TapEndpoint, error) {
+ 	if idx < 0 {
+ 		return &TapEndpoint{}, fmt.Errorf("invalid network endpoint index: %d", idx)
+ 	}
+@@ -139,6 +139,10 @@ func createTapNetworkEndpoint(idx int, ifName string, tapIfName string) (*TapEnd
+ 		endpoint.TapInterface.TAPIface.Name = tapIfName
+ 	}
+ 
++	if queues > 0 {
++		endpoint.TapInterface.Queues = queues
++	}
++
+ 	return endpoint, nil
+ }
+ 
+diff --git a/virtcontainers/tuntap_endpoint.go b/virtcontainers/tuntap_endpoint.go
+index b076d694..827d8852 100644
+--- a/virtcontainers/tuntap_endpoint.go
++++ b/virtcontainers/tuntap_endpoint.go
+@@ -117,12 +117,12 @@ func (endpoint *TuntapEndpoint) HotDetach(h hypervisor, netNsCreated bool, netNs
+ 	return nil
+ }
+ 
+-func createTuntapNetworkEndpoint(idx int, ifName string, hwName net.HardwareAddr, internetworkingModel NetInterworkingModel) (*TuntapEndpoint, error) {
++func createTuntapNetworkEndpoint(idx int, ifName string, hwName net.HardwareAddr, internetworkingModel NetInterworkingModel, queues uint32) (*TuntapEndpoint, error) {
+ 	if idx < 0 {
+ 		return &TuntapEndpoint{}, fmt.Errorf("invalid network endpoint index: %d", idx)
+ 	}
+ 
+-	netPair, err := createNetworkInterfacePair(idx, ifName, internetworkingModel)
++	netPair, err := createNetworkInterfacePair(idx, ifName, internetworkingModel, queues)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/virtcontainers/veth_endpoint.go b/virtcontainers/veth_endpoint.go
+index 0f2ec9ba..554b9b22 100644
+--- a/virtcontainers/veth_endpoint.go
++++ b/virtcontainers/veth_endpoint.go
+@@ -20,12 +20,12 @@ type VethEndpoint struct {
+ 	PCIAddr            string
+ }
+ 
+-func createVethNetworkEndpoint(idx int, ifName string, interworkingModel NetInterworkingModel) (*VethEndpoint, error) {
++func createVethNetworkEndpoint(idx int, ifName string, interworkingModel NetInterworkingModel, queues uint32) (*VethEndpoint, error) {
+ 	if idx < 0 {
+ 		return &VethEndpoint{}, fmt.Errorf("invalid network endpoint index: %d", idx)
+ 	}
+ 
+-	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel)
++	netPair, err := createNetworkInterfacePair(idx, ifName, interworkingModel, queues)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/virtcontainers/veth_endpoint_test.go b/virtcontainers/veth_endpoint_test.go
+index 9649b82e..23f1876d 100644
+--- a/virtcontainers/veth_endpoint_test.go
++++ b/virtcontainers/veth_endpoint_test.go
+@@ -34,7 +34,7 @@ func TestCreateVethNetworkEndpoint(t *testing.T) {
+ 		EndpointType: VethEndpointType,
+ 	}
+ 
+-	result, err := createVethNetworkEndpoint(4, "", DefaultNetInterworkingModel)
++	result, err := createVethNetworkEndpoint(4, "", DefaultNetInterworkingModel, 0)
+ 	assert.NoError(err)
+ 
+ 	// the resulting ID  will be random - so let's overwrite to test the rest of the flow
+@@ -68,7 +68,7 @@ func TestCreateVethNetworkEndpointChooseIfaceName(t *testing.T) {
+ 		EndpointType: VethEndpointType,
+ 	}
+ 
+-	result, err := createVethNetworkEndpoint(4, "eth1", DefaultNetInterworkingModel)
++	result, err := createVethNetworkEndpoint(4, "eth1", DefaultNetInterworkingModel, 0)
+ 	assert.NoError(err)
+ 
+ 	// the resulting ID will be random - so let's overwrite to test the rest of the flow
+@@ -95,7 +95,7 @@ func TestCreateVethNetworkEndpointInvalidArgs(t *testing.T) {
+ 	}
+ 
+ 	for _, d := range failingValues {
+-		_, err := createVethNetworkEndpoint(d.idx, d.ifName, DefaultNetInterworkingModel)
++		_, err := createVethNetworkEndpoint(d.idx, d.ifName, DefaultNetInterworkingModel, 0)
+ 		assert.Error(err)
+ 	}
+ }
+diff --git a/virtcontainers/vhostuser_endpoint.go b/virtcontainers/vhostuser_endpoint.go
+index 2fc3d837..85ef67b4 100644
+--- a/virtcontainers/vhostuser_endpoint.go
++++ b/virtcontainers/vhostuser_endpoint.go
+@@ -33,6 +33,7 @@ type VhostUserEndpoint struct {
+ 	EndpointProperties NetworkInfo
+ 	EndpointType       EndpointType
+ 	PCIAddr            string
++	Queues             uint32
+ }
+ 
+ // Properties returns the properties of the interface.
+@@ -119,7 +120,7 @@ func (endpoint *VhostUserEndpoint) HotDetach(h hypervisor, netNsCreated bool, ne
+ }
+ 
+ // Create a vhostuser endpoint
+-func createVhostUserEndpoint(netInfo NetworkInfo, socket string) (*VhostUserEndpoint, error) {
++func createVhostUserEndpoint(netInfo NetworkInfo, socket string, queues uint32) (*VhostUserEndpoint, error) {
+ 	uniqueID := uuid.Generate().String()
+ 	vhostUserEndpoint := &VhostUserEndpoint{
+ 		ID:           uniqueID,
+@@ -127,6 +128,7 @@ func createVhostUserEndpoint(netInfo NetworkInfo, socket string) (*VhostUserEndp
+ 		HardAddr:     netInfo.Iface.HardwareAddr.String(),
+ 		IfaceName:    netInfo.Iface.Name,
+ 		EndpointType: VhostUserEndpointType,
++		Queues:       queues,
+ 	}
+ 	return vhostUserEndpoint, nil
+ }
+diff --git a/virtcontainers/vhostuser_endpoint_test.go b/virtcontainers/vhostuser_endpoint_test.go
+index 584490cc..046ca229 100644
+--- a/virtcontainers/vhostuser_endpoint_test.go
++++ b/virtcontainers/vhostuser_endpoint_test.go
+@@ -137,7 +137,7 @@ func TestCreateVhostUserEndpoint(t *testing.T) {
+ 		EndpointType: VhostUserEndpointType,
+ 	}
+ 
+-	result, err := createVhostUserEndpoint(netinfo, socket)
++	result, err := createVhostUserEndpoint(netinfo, socket, 0)
+ 	assert.NoError(err)
+ 	assert.Exactly(result, expected)
+ }
+-- 
+2.14.3 (Apple Git-98)
+

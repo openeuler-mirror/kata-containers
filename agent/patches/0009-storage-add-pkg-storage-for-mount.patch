@@ -1,0 +1,188 @@
+From 1268b710c7f0528d971d9c0e54429d3f4e48c372 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Tue, 18 Aug 2020 16:45:29 +0800
+Subject: [PATCH 09/16] storage: add pkg/storage for mount
+
+reason: add gpath.go and nfs.go, provide mount
+functions and structs
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ pkg/storage/gpath.go | 64 ++++++++++++++++++++++++++++++++++++
+ pkg/storage/nfs.go   | 93 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 157 insertions(+)
+ create mode 100644 pkg/storage/gpath.go
+ create mode 100644 pkg/storage/nfs.go
+
+diff --git a/pkg/storage/gpath.go b/pkg/storage/gpath.go
+new file mode 100644
+index 0000000..5cb951f
+--- /dev/null
++++ b/pkg/storage/gpath.go
+@@ -0,0 +1,64 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++// Description: common functions
++// Author: licuifang
++// Create: 2019-06-24
++
++package storage
++
++import (
++	"fmt"
++	"os"
++	"syscall"
++
++	"github.com/opencontainers/runc/libcontainer/mount"
++)
++
++func ValidateGpath(guestPath string, opts []string) error {
++	for _, opt := range opts {
++		switch opt {
++		case "shared":
++			flag := syscall.MS_SHARED
++			if err := ensureMountedAs(guestPath, flag); err != nil {
++				return err
++			}
++			return nil
++		case "mounted":
++			// if mounted in option, the guestpath must exist and must be a mountpoint
++			_, err := os.Stat(guestPath)
++			if err != nil {
++				return err
++			}
++			mountpoint, err := mount.Mounted(guestPath)
++			if err != nil {
++				return err
++			}
++			if mountpoint == false {
++				return fmt.Errorf("the guespath:%s is not a mountpoint while mounted was set", guestPath)
++			}
++			return nil
++		}
++	}
++	if err := os.MkdirAll(guestPath, 0750); err != nil {
++		return err
++	}
++	return nil
++}
++
++func ensureMountedAs(mountPoint string, flag int) error {
++	if err := os.MkdirAll(mountPoint, 0750); err != nil {
++		return err
++	}
++	mounted, err := mount.Mounted(mountPoint)
++	if err != nil {
++		return err
++	}
++
++	if !mounted {
++		if err := syscall.Mount(mountPoint, mountPoint, "bind", uintptr(syscall.MS_BIND), ""); err != nil {
++			return err
++		}
++	}
++
++	return syscall.Mount("", mountPoint, "", uintptr(flag), "")
++}
+diff --git a/pkg/storage/nfs.go b/pkg/storage/nfs.go
+new file mode 100644
+index 0000000..44bc85d
+--- /dev/null
++++ b/pkg/storage/nfs.go
+@@ -0,0 +1,93 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++// SPDX-License-Identifier: Apache-2.0
++// Description: common functions
++// Author: leizhongkai
++// Create: 2019-03-10
++
++package storage
++
++import (
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/opencontainers/runc/libcontainer/mount"
++	"github.com/sirupsen/logrus"
++)
++
++const (
++	NFS = "nfs"
++
++	MAX_MOUNT_ATTEMPTS = 100
++	MAX_MOUTN_TIMEOUT  = 90 // seconds
++
++	// ignored errors
++	PERMISSION_DENY     = "Permission denied"
++	kataGuestStorageDir = "/run/kata-containers/storage/containers/"
++)
++
++func nfsMount(source, dest string, opt string) error {
++	cmd := exec.Command("/bin/mount", "-t", "nfs", "-o", opt, source, dest)
++	res, err := cmd.Output()
++	logrus.Debugf("mount %s to %s, and get res %s", source, dest, string(res))
++	return err
++}
++
++func nfsMountWithAttempt(source, dest string, opt string) (err error) {
++	timeStart := time.Now().Unix()
++	for i := 0; i < MAX_MOUNT_ATTEMPTS; i++ {
++		logrus.Infof("this is the %d times to mount %s to %s", i, source, dest)
++		err = nfsMount(source, dest, opt)
++		if err != nil {
++			ee, ok := err.(*exec.ExitError)
++			if ok {
++				if strings.Contains(string(ee.Stderr), PERMISSION_DENY) {
++					logrus.Errorf("mounting nfs:%s to %s, get error: %s,should break", source, dest, string(ee.Stderr))
++					// We do not retry when the error type is PERMISSION_DENY.
++					// The reason for the retry is that when you do a SFS mount,
++					// the network may not have been created yet, because
++					// creating the network and startup container is asynchronous
++					break
++				}
++				logrus.Infof("mounting nfs:%s to %s, get error: %s,will retry", source, dest, string(ee.Stderr))
++			}
++
++			elapsed := time.Now().Unix() - timeStart
++			if elapsed < MAX_MOUTN_TIMEOUT {
++				time.Sleep(50 * time.Microsecond)
++				continue
++			}
++		}
++		break
++	}
++
++	return err
++}
++
++func MountRemoteNfs(source string, opt []string, sandboxId string) error {
++	item := strings.Split(source, ":")
++	if len(item) != 2 {
++		return fmt.Errorf("the nfs of %s format is error", source)
++	}
++	tmpDes := filepath.Join(kataGuestStorageDir, sandboxId, item[0],item[1])
++	if mounted, err := mount.Mounted(tmpDes); err == nil && mounted == true {
++		return nil
++	}
++	err := os.MkdirAll(tmpDes, 0750)
++	if err != nil {
++		logrus.Infof("mkdir %s failed before mount remote nfs server", tmpDes)
++		return err
++	}
++	defer func() {
++		if err != nil {
++			os.RemoveAll(tmpDes)
++		}
++	}()
++
++	err = nfsMountWithAttempt(source, tmpDes, strings.Join(opt, ","))
++
++	return err
++}
+-- 
+2.14.3 (Apple Git-98)
+

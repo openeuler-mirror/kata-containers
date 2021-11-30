@@ -1,0 +1,38 @@
+From 37372be961528471d418bbe066d88a010ad0513c Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Tue, 18 Aug 2020 22:12:59 +0800
+Subject: [PATCH 42/50] kata-runtime: do not ignore updateInterface return
+ error
+
+reason: If send UpdateInterfaceRequest to kata-agent and return the
+error back, we should process it correctly, should not ignore the
+error, which may casue deference nil pointer problem.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/kata_agent.go | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index ac64817a..fee4215f 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -604,7 +604,15 @@ func (k *kataAgent) updateInterface(ifc *vcTypes.Interface) (*vcTypes.Interface,
+ 			"interface-requested": fmt.Sprintf("%+v", ifc),
+ 			"resulting-interface": fmt.Sprintf("%+v", resultingInterface),
+ 		}).WithError(err).Error("update interface request failed")
++		return nil, err
++	}
++
++	// need to judege resultingInterface is not not, otherwise may cause
++	// deference nil pointer panic problem
++	if resultingInterface == nil {
++		return nil, fmt.Errorf("resultingInterface should not be nil")
+ 	}
++
+ 	if resultInterface, ok := resultingInterface.(*aTypes.Interface); ok {
+ 		iface := &vcTypes.Interface{
+ 			Device:      resultInterface.Device,
+-- 
+2.14.3 (Apple Git-98)
+

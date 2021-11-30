@@ -1,0 +1,318 @@
+From f4b899b933a3a30fc378ceb4d8855778cd783d9a Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Fri, 18 Sep 2020 16:54:11 +0800
+Subject: [PATCH 4/5] kata_runtime: support the blkio in host cgroups
+
+reason: support the blkio in host cgroups, run with paras
+--annotation io.kubernetes.docker.type=podsandbox --annotation io.katacontainers.blkio_cgroup=
+'{"blkiocgroup":[{"path":"/dev/sda","limits":[{"type":"throttle_read_bps","value":400}]}]}'
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ vendor/github.com/containerd/cgroups/blkio.go |   6 ++
+ virtcontainers/cgroups.go                     | 102 ++++++++++++++++++++++++++
+ virtcontainers/pkg/annotations/annotations.go |   3 +
+ virtcontainers/pkg/oci/utils.go               |  50 ++++++++++++-
+ virtcontainers/sandbox.go                     |   6 ++
+ virtcontainers/utils/utils.go                 |  22 ++++++
+ 6 files changed, 186 insertions(+), 3 deletions(-)
+
+diff --git a/vendor/github.com/containerd/cgroups/blkio.go b/vendor/github.com/containerd/cgroups/blkio.go
+index 7c498de..485ff7b 100644
+--- a/vendor/github.com/containerd/cgroups/blkio.go
++++ b/vendor/github.com/containerd/cgroups/blkio.go
+@@ -23,6 +23,7 @@ import (
+ 	"io/ioutil"
+ 	"os"
+ 	"path/filepath"
++	"reflect"
+ 	"strconv"
+ 	"strings"
+ 
+@@ -55,6 +56,11 @@ func (b *blkioController) Create(path string, resources *specs.LinuxResources) e
+ 		return nil
+ 	}
+ 	for _, t := range createBlkioSettings(resources.BlockIO) {
++		ptr := reflect.ValueOf(t.value)
++		if ptr.Kind() == reflect.Ptr && ptr.IsNil() {
++			continue
++		}
++
+ 		if t.value != nil {
+ 			if err := ioutil.WriteFile(
+ 				filepath.Join(b.Path(path), fmt.Sprintf("blkio.%s", t.name)),
+diff --git a/virtcontainers/cgroups.go b/virtcontainers/cgroups.go
+index 65d2001..e8c5a7b 100644
+--- a/virtcontainers/cgroups.go
++++ b/virtcontainers/cgroups.go
+@@ -9,6 +9,7 @@ package virtcontainers
+ import (
+ 	"bufio"
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
+@@ -16,6 +17,8 @@ import (
+ 	"strings"
+ 
+ 	"github.com/containerd/cgroups"
++	"github.com/kata-containers/runtime/virtcontainers/pkg/annotations"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	specs "github.com/opencontainers/runtime-spec/specs-go"
+ 	"github.com/sirupsen/logrus"
+ )
+@@ -32,8 +35,46 @@ const (
+ 	cgroupKataPath     = "/kata/"
+ 	vcpuCgroupName     = "vcpu"
+ 	emulatorCgroupName = "emulator"
++
++	// BlkioThrottleReadBps is the key to fetch throttle_read_bps
++	BlkioThrottleReadBps = "throttle_read_bps"
++
++	// BlkioThrottleWriteBps is the key to fetch throttle_write_bps
++	BlkioThrottleWriteBps = "throttle_write_bps"
++
++	// BlkioThrottleReadIOPS is the key to fetch throttle_read_iops
++	BlkioThrottleReadIOPS = "throttle_read_iops"
++
++	// BlkioThrottleWriteIOPS is the key to fetch throttle_write_iops
++	BlkioThrottleWriteIOPS = "throttle_write_iops"
++
++	// BlkioWeight is the key to fetch blkio_weight
++	BlkioWeight = "blkio_weight"
++
++	// BlkioLeafWeight is the key to fetch blkio_leaf_weight
++	BlkioLeafWeight = "blkio_leaf_weight"
+ )
+ 
++// BlkioCgroup for Linux cgroup 'blkio' data exchange
++type BlkioCgroup struct {
++	// Items specifies per cgroup values
++	Items []BlockIOCgroupItem `json:"blkiocgroup,omitempty"`
++}
++
++type BlockIOCgroupItem struct {
++	// Path represent path of blkio device
++	Path string `json:"path,omitempty"`
++	// Limits specifies the blkio type and value
++	Limits []IOLimit `json:"limits,omitempty"`
++}
++
++type IOLimit struct {
++	// Type specifies IO type
++	Type string `json:"type,omitempty"`
++	// Value specifies rate or weight value
++	Value uint64 `json:"value,omitempty"`
++}
++
+ var cgroupsLoadFunc = cgroups.Load
+ var cgroupsNewFunc = cgroups.New
+ 
+@@ -372,3 +413,64 @@ func isInSlice(i int, s []int) bool {
+ 	}
+ 	return false
+ }
++
++func (s *Sandbox) blockIOResource() *specs.LinuxBlockIO {
++	value, ok := s.config.Annotations[annotations.BlkioCgroupTypeKey]
++	if !ok {
++		return nil
++	}
++
++	var blkioCgroupParse BlkioCgroup
++	var linuxBlkio specs.LinuxBlockIO
++	if err := json.Unmarshal([]byte(value), &blkioCgroupParse); err != nil {
++		s.Logger().Errorf("blkio_cgroup Unmarshal error:%v", err)
++		return nil
++	}
++
++	for _, item := range blkioCgroupParse.Items {
++		if item.Limits == nil {
++			s.Logger().Errorf("%v:limits have none data", item)
++			return nil
++		}
++		for _, limit := range item.Limits {
++			if item.Path != "" {
++				major, minor, err := utils.GetDeviceByPath(item.Path)
++				if err != nil {
++					s.Logger().Errorf("failed to find major and minor of device %s: %v", item.Path, err)
++					return nil
++				}
++				td := specs.LinuxThrottleDevice{
++					Rate: limit.Value,
++				}
++				td.Major = major
++				td.Minor = minor
++				switch limit.Type {
++				case BlkioThrottleReadBps:
++					linuxBlkio.ThrottleReadBpsDevice = append(linuxBlkio.ThrottleReadBpsDevice, td)
++				case BlkioThrottleWriteBps:
++					linuxBlkio.ThrottleWriteBpsDevice = append(linuxBlkio.ThrottleWriteBpsDevice, td)
++				case BlkioThrottleReadIOPS:
++					linuxBlkio.ThrottleReadIOPSDevice = append(linuxBlkio.ThrottleReadIOPSDevice, td)
++				case BlkioThrottleWriteIOPS:
++					linuxBlkio.ThrottleWriteIOPSDevice = append(linuxBlkio.ThrottleWriteIOPSDevice, td)
++				default:
++					s.Logger().Errorf("the type of throtlle device：%s is not surpport", limit.Type)
++					return nil
++				}
++			} else {
++				switch limit.Type {
++				case BlkioWeight:
++					weightUint16 := uint16(limit.Value)
++					linuxBlkio.Weight = &weightUint16
++				case BlkioLeafWeight:
++					weightLeafUint16 := uint16(limit.Value)
++					linuxBlkio.LeafWeight = &weightLeafUint16
++				default:
++					s.Logger().Errorf("the type:%s is not one of the supported types of blkio_weight and blkio_leaf_weight", limit.Type)
++					return nil
++				}
++			}
++		}
++	}
++	return &linuxBlkio
++}
+diff --git a/virtcontainers/pkg/annotations/annotations.go b/virtcontainers/pkg/annotations/annotations.go
+index 96c4ef2..c35993e 100644
+--- a/virtcontainers/pkg/annotations/annotations.go
++++ b/virtcontainers/pkg/annotations/annotations.go
+@@ -21,6 +21,9 @@ const (
+ 	ContainerTypeKey = kataAnnotationsPrefix + "pkg.oci.container_type"
+ 
+ 	SandboxConfigPathKey = kataAnnotationsPrefix + "config_path"
++
++	// BlkioCgroupTypeKey is the annotation key to fetch sandbox blkio cgroup values
++	BlkioCgroupTypeKey = kataAnnotationsPrefix + "blkio_cgroup"
+ )
+ 
+ // Annotations related to Hypervisor configuration
+diff --git a/virtcontainers/pkg/oci/utils.go b/virtcontainers/pkg/oci/utils.go
+index e8ef41b..643753b 100644
+--- a/virtcontainers/pkg/oci/utils.go
++++ b/virtcontainers/pkg/oci/utils.go
+@@ -38,9 +38,10 @@ type annotationContainerType struct {
+ type annotationHandler func(value string) error
+ 
+ var annotationHandlerList = map[string]annotationHandler{
+-	vcAnnotations.StaticCPUTypeKey:  validateSandboxCPU,
+-	vcAnnotations.StaticMemTypeKey:  validateSandboxMem,
+-	vcAnnotations.SandboxDNSTypeKey: validateSandboxDNS,
++	vcAnnotations.StaticCPUTypeKey:   validateSandboxCPU,
++	vcAnnotations.StaticMemTypeKey:   validateSandboxMem,
++	vcAnnotations.SandboxDNSTypeKey:  validateSandboxDNS,
++	vcAnnotations.BlkioCgroupTypeKey: validateBlkioCgroup,
+ }
+ 
+ var (
+@@ -1076,6 +1077,7 @@ func validateOtherSandboxAnnotations(annotation, value string) error {
+ // addOtherSandboxAnnotation add self defined annotation for sandbox
+ func addOtherSandboxAnnotation(ocispec specs.Spec, sbConfig *vc.SandboxConfig) error {
+ 	otherSandboxAnnotationsKey := []string{
++		vcAnnotations.BlkioCgroupTypeKey,
+ 		vcAnnotations.StaticCPUTypeKey,
+ 		vcAnnotations.StaticMemTypeKey,
+ 	}
+@@ -1137,6 +1139,48 @@ func validateSandboxDNS(value string) error {
+ 	return nil
+ }
+ 
++func validateBlkioCgroup(value string) error {
++	var linuxBlkioCgroup vc.BlkioCgroup
++	if err := json.Unmarshal([]byte(value), &linuxBlkioCgroup); err != nil {
++		return fmt.Errorf("blkio_cgroup Unmarshal error:%v, value is %s", err, value)
++	}
++
++	if linuxBlkioCgroup.Items == nil {
++		return fmt.Errorf("BlkioCgroup:%v fetch none data", linuxBlkioCgroup)
++	}
++
++	// pathNull used to judge path for blkio.weight/blkio.leaf_weight only once
++	pathNull := false
++	for _, item := range linuxBlkioCgroup.Items {
++		if pathNull {
++			return fmt.Errorf("too many paths for blkio.weight/blkio.leaf_weight")
++		}
++		if item.Path == "" && !pathNull {
++			pathNull = true
++			if len(item.Limits) > 2 || len(item.Limits) == 0 {
++				return fmt.Errorf("the format of values for blkio.weight or blkio.leaf_weight is wrong")
++			}
++
++			for _, ioLimit := range item.Limits {
++				switch ioLimit.Type {
++				case vc.BlkioWeight:
++					// Blkio.weight, between 10 and 1000
++					if ioLimit.Value < 10 || ioLimit.Value > 1000 {
++						return fmt.Errorf("blkio.weight:%v must be between 10 and 1000", ioLimit.Value)
++					}
++				case vc.BlkioLeafWeight:
++					return fmt.Errorf("the blkio.leaf_weight is not supported now")
++				default:
++					return fmt.Errorf("the type of blkio device：%s is not surpport", ioLimit.Type)
++				}
++			}
++		} else if _, _, err := utils.GetDeviceByPath(item.Path); err != nil {
++			return fmt.Errorf("failed to find major and minor of device %s: %v", item.Path, err)
++		}
++	}
++	return nil
++}
++
+ func GetSandboxIDFromAnnotations(s *specs.Spec) (string, error) {
+ 	if s == nil {
+ 		return "", fmt.Errorf("spec is nil")
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index ca4e700..9284f99 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -2422,6 +2422,12 @@ func (s *Sandbox) setupHostCgroupsWithEmulator() error {
+ 	}
+ 
+ 	// limit blkio resource to "<path>"
++	blkioResources := specs.LinuxResources{
++		BlockIO: s.blockIOResource(),
++	}
++	if err := applyResourceLimit(&blkioResources, vcpuCgroupPath); err != nil {
++		return err
++	}
+ 
+ 	// limit files resource
+ 
+diff --git a/virtcontainers/utils/utils.go b/virtcontainers/utils/utils.go
+index 36ac67a..d4dad40 100644
+--- a/virtcontainers/utils/utils.go
++++ b/virtcontainers/utils/utils.go
+@@ -370,6 +370,28 @@ func GetPhysicalCPUNumber() int {
+ 	return cpuNum
+ }
+ 
++// GetDeviceByPath returns the device No.
++func GetDeviceByPath(path string) (int64, int64, error) {
++	if path == "" {
++		return -1, -1, fmt.Errorf("Path cannot be empty")
++	}
++
++	path, err := filepath.EvalSymlinks(path)
++	if err != nil {
++		return -1, -1, err
++	}
++
++	stat := syscall.Stat_t{}
++	err = syscall.Stat(path, &stat)
++	if err != nil {
++		return -1, -1, err
++	}
++
++	major := int64(stat.Rdev / 256)
++	minor := int64(stat.Rdev % 256)
++	return major, minor, nil
++}
++
+ func RoundVCPUNumber(value string) (int, error) {
+ 	cpuNum, err := strconv.ParseFloat(value, 64)
+ 	if err != nil || cpuNum < minCPUs {
+-- 
+1.8.3.1
+

@@ -1,0 +1,188 @@
+From 75141529674545a2f84b01c730f614901ad2265e Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 10 Aug 2020 10:08:47 +0800
+Subject: [PATCH 20/50] virtcontainers: add enable_cpu_memory_hotplug config in
+ the configuration.toml
+
+reason: add enable_cpu_memory_hotplug config to control whether enable hotplug
+memory and cpu resource into the Kata VM. If we can calculate the whole sandbox
+resource usage already, we just need to pass the value of resouces by annotation
+without hotplugging.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/config/configuration-qemu.toml.in |  4 ++++
+ pkg/katautils/config.go               |  2 ++
+ virtcontainers/container.go           |  6 ++++--
+ virtcontainers/hypervisor.go          |  3 +++
+ virtcontainers/persist.go             |  2 ++
+ virtcontainers/persist/api/config.go  |  3 +++
+ virtcontainers/sandbox.go             | 38 +++++++++++++++++++++--------------
+ 7 files changed, 41 insertions(+), 17 deletions(-)
+
+diff --git a/cli/config/configuration-qemu.toml.in b/cli/config/configuration-qemu.toml.in
+index 82461732..b44e84d8 100644
+--- a/cli/config/configuration-qemu.toml.in
++++ b/cli/config/configuration-qemu.toml.in
+@@ -100,6 +100,10 @@ default_memory = @DEFMEMSZ@
+ # Default false
+ #enable_reuse_cpu_memory = false
+ 
++# If enabled, the runtime will support cpu and memory hot plug
++# (default: disabled)
++#enable_cpu_memory_hotplug = true
++
+ # Disable block device from being used for a container's rootfs.
+ # In case of a storage driver like devicemapper where a container's 
+ # root file system is backed by a block device, the block device is passed
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index b9b08469..9a99b9d4 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -112,6 +112,7 @@ type hypervisor struct {
+ 	MemSlots                uint32   `toml:"memory_slots"`
+ 	MemOffset               uint32   `toml:"memory_offset"`
+ 	EnableCPUMemoryReuse    bool     `toml:"enable_reuse_cpu_memory"`
++	EnableCPUMemoryHotPlug  bool     `toml:"enable_cpu_memory_hotplug"`
+ 	DefaultBridges          uint32   `toml:"default_bridges"`
+ 	Msize9p                 uint32   `toml:"msize_9p"`
+ 	PCIeRootPort            uint32   `toml:"pcie_root_port"`
+@@ -675,6 +676,7 @@ func newQemuHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		MemSlots:                h.defaultMemSlots(),
+ 		MemOffset:               h.defaultMemOffset(),
+ 		EnableCPUMemoryReuse:    h.EnableCPUMemoryReuse,
++		EnableCPUMemoryHotPlug:  h.EnableCPUMemoryHotPlug,
+ 		VirtioMem:               h.VirtioMem,
+ 		EntropySource:           h.GetEntropySource(),
+ 		DefaultBridges:          h.defaultBridges(),
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 75f590eb..1b89f6ac 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -1273,8 +1273,10 @@ func (c *Container) update(resources specs.LinuxResources) error {
+ 		c.config.Resources.Memory.Limit = mem.Limit
+ 	}
+ 
+-	if err := c.sandbox.updateResources(); err != nil {
+-		return err
++	if c.sandbox.config.HypervisorConfig.EnableCPUMemoryHotPlug {
++		if err := c.sandbox.updateResources(); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	if !c.sandbox.config.SandboxCgroupOnly {
+diff --git a/virtcontainers/hypervisor.go b/virtcontainers/hypervisor.go
+index 9cd685ad..c0723daa 100644
+--- a/virtcontainers/hypervisor.go
++++ b/virtcontainers/hypervisor.go
+@@ -253,6 +253,9 @@ type HypervisorConfig struct {
+ 	// Enable hypervisor cpu and memory resource share with container
+ 	EnableCPUMemoryReuse bool
+ 
++	// Enable hotplug cpu and memory resource into container
++	EnableCPUMemoryHotPlug bool
++
+ 	// VirtioFSCacheSize is the DAX cache size in MiB
+ 	VirtioFSCacheSize uint32
+ 
+diff --git a/virtcontainers/persist.go b/virtcontainers/persist.go
+index aef4d18d..6bd09a0b 100644
+--- a/virtcontainers/persist.go
++++ b/virtcontainers/persist.go
+@@ -215,6 +215,7 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 		MemSlots:                sconfig.HypervisorConfig.MemSlots,
+ 		MemOffset:               sconfig.HypervisorConfig.MemOffset,
+ 		EnableCPUMemoryReuse:    sconfig.HypervisorConfig.EnableCPUMemoryReuse,
++		EnableCPUMemoryHotPlug:  sconfig.HypervisorConfig.EnableCPUMemoryHotPlug,
+ 		VirtioMem:               sconfig.HypervisorConfig.VirtioMem,
+ 		VirtioFSCacheSize:       sconfig.HypervisorConfig.VirtioFSCacheSize,
+ 		KernelPath:              sconfig.HypervisorConfig.KernelPath,
+@@ -505,6 +506,7 @@ func loadSandboxConfig(id string) (*SandboxConfig, error) {
+ 		MemSlots:                hconf.MemSlots,
+ 		MemOffset:               hconf.MemOffset,
+ 		EnableCPUMemoryReuse:    hconf.EnableCPUMemoryReuse,
++		EnableCPUMemoryHotPlug:  hconf.EnableCPUMemoryHotPlug,
+ 		VirtioMem:               hconf.VirtioMem,
+ 		VirtioFSCacheSize:       hconf.VirtioFSCacheSize,
+ 		KernelPath:              hconf.KernelPath,
+diff --git a/virtcontainers/persist/api/config.go b/virtcontainers/persist/api/config.go
+index a3c6ec91..cfbee849 100644
+--- a/virtcontainers/persist/api/config.go
++++ b/virtcontainers/persist/api/config.go
+@@ -38,6 +38,9 @@ type HypervisorConfig struct {
+ 	// Enable hypervisor cpu and memory resource share with container
+ 	EnableCPUMemoryReuse bool
+ 
++	// Enable hotplug cpu and memory resource into container
++	EnableCPUMemoryHotPlug bool
++
+ 	// VirtioFSCacheSize is the DAX cache size in MiB
+ 	VirtioFSCacheSize uint32
+ 
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 7322ef58..8fcd92d4 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -1189,12 +1189,16 @@ func (s *Sandbox) CreateContainer(contConfig ContainerConfig) (VCContainer, erro
+ 		}
+ 	}()
+ 
+-	// Sandbox is reponsable to update VM resources needed by Containers
+-	// Update resources after having added containers to the sandbox, since
+-	// container status is requiered to know if more resources should be added.
+-	err = s.updateResources()
+-	if err != nil {
+-		return nil, err
++	// update sandbox resource only when enable_cpu_memory_hotplug config set true
++	// in the config.toml file
++	if s.config.HypervisorConfig.EnableCPUMemoryHotPlug {
++		// Sandbox is reponsable to update VM resources needed by Containers
++		// Update resources after having added containers to the sandbox, since
++		// container status is requiered to know if more resources should be added.
++		err = s.updateResources()
++		if err != nil {
++			return nil, err
++		}
+ 	}
+ 
+ 	if err = s.cgroupsUpdate(); err != nil {
+@@ -1228,11 +1232,13 @@ func (s *Sandbox) StartContainer(containerID string) (VCContainer, error) {
+ 
+ 	s.Logger().Info("Container is started")
+ 
+-	// Update sandbox resources in case a stopped container
+-	// is started
+-	err = s.updateResources()
+-	if err != nil {
+-		return nil, err
++	if s.config.HypervisorConfig.EnableCPUMemoryHotPlug {
++		// Update sandbox resources in case a stopped container
++		// is started
++		err = s.updateResources()
++		if err != nil {
++			return nil, err
++		}
+ 	}
+ 
+ 	return c, nil
+@@ -1503,10 +1509,12 @@ func (s *Sandbox) createContainers() error {
+ 		}
+ 	}
+ 
+-	// Update resources after having added containers to the sandbox, since
+-	// container status is requiered to know if more resources should be added.
+-	if err := s.updateResources(); err != nil {
+-		return err
++	if s.config.HypervisorConfig.EnableCPUMemoryHotPlug {
++		// Update resources after having added containers to the sandbox, since
++		// container status is requiered to know if more resources should be added.
++		if err := s.updateResources(); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	if err := s.cgroupsUpdate(); err != nil {
+-- 
+2.14.3 (Apple Git-98)
+

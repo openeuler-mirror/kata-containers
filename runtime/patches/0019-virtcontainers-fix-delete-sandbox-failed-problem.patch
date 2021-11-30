@@ -1,0 +1,33 @@
+From d20cb25c8a145e1d3e64eefa69242d87b7a67f92 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sat, 8 Aug 2020 16:00:45 -0400
+Subject: [PATCH 19/50] virtcontainers: fix delete sandbox failed problem
+
+fixes: #2882
+
+reason: If error happens after container create and before sandbox
+updateResouce in the `CreateContainer()`, then delete sandbox
+forcefully will return error because s.config.Containers config not
+flushed into persist store.
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/sandbox.go | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/virtcontainers/sandbox.go b/virtcontainers/sandbox.go
+index 3dbf640e..7322ef58 100644
+--- a/virtcontainers/sandbox.go
++++ b/virtcontainers/sandbox.go
+@@ -1156,6 +1156,8 @@ func (s *Sandbox) CreateContainer(contConfig ContainerConfig) (VCContainer, erro
+ 			if len(s.config.Containers) > 0 {
+ 				// delete container config
+ 				s.config.Containers = s.config.Containers[:len(s.config.Containers)-1]
++				// need to flush change to persist storage
++				_ = s.storeSandbox()
+ 			}
+ 		}
+ 	}()
+-- 
+2.14.3 (Apple Git-98)
+

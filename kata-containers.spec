@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 14
+%define RELEASE 15
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Tue Nov 30 2021 jikui <jikui2@huawei.com> - 2.1.0-15
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:check VFIO when create device
+
 * Mon Nov 29 2021 jikui <jikui2@huawei.com> - 2.1.0-14
 - Type:bugfix
 - ID:NA

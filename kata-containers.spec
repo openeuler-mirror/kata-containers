@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 16
+%define RELEASE 17
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Thu Dec 2 2021 jikui <jikui2@huawei.com> - 2.1.0-17
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:don't ignore updateInterface return error
+
 * Tue Nov 30 2021 jikui <jikui2@huawei.com> - 2.1.0-16
 - Type:bugfix
 - ID:NA

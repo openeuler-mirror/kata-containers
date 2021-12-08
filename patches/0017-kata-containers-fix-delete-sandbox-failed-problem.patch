@@ -1,7 +1,7 @@
 From 514a0a19e5f37458d1a7e44c8b2fb4bff3b12d5b Mon Sep 17 00:00:00 2001
 From: jikui <jikui2@huawei.com>
 Date: Fri, 5 Nov 2021 16:40:05 +0800
-Subject: [PATCH 8/8] kata-runtime: fix delete sandbox failed problem
+Subject: [PATCH] kata-runtime: fix delete sandbox failed problem
 
 Signed-off-by: jikui <jikui2@huawei.com>
 ---

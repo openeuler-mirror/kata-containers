@@ -1,7 +1,7 @@
 From 420cb51b47e19556c35423354102fdc3a4d041f0 Mon Sep 17 00:00:00 2001
 From: jikui <jikui2@huawei.com>
 Date: Fri, 5 Nov 2021 16:29:40 +0800
-Subject: [PATCH 7/8] kata-runtime: validate sandbox cpu and memory size
+Subject: [PATCH] kata-runtime: validate sandbox cpu and memory size
 
 Signed-off-by: jikui <jikui2@huawei.com>
 ---

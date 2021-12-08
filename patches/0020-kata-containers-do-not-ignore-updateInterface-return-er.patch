@@ -1,7 +1,7 @@
 From 39ac2f6929aea7e404c4597683e43fba7949964c Mon Sep 17 00:00:00 2001
 From: jikui <jikui2@huawei.com>
 Date: Tue, 30 Nov 2021 11:47:36 +0800
-Subject: [PATCH 2/4] kata-runtime: do not ignore updateInterface return error
+Subject: [PATCH] kata-runtime: do not ignore updateInterface return error
 
 Signed-off-by: jikui <jikui2@huawei.com>
 ---

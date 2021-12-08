@@ -1,0 +1,45 @@
+From 1bb584ac783d057b64058b02cc96c1c67dd7bf30 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Tue, 30 Nov 2021 12:02:42 +0800
+Subject: [PATCH] kata-runtime: fix the block device not remove in devManager
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ src/runtime/virtcontainers/container.go | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/runtime/virtcontainers/container.go b/src/runtime/virtcontainers/container.go
+index 224f096..dd4317e 100644
+--- a/src/runtime/virtcontainers/container.go
++++ b/src/runtime/virtcontainers/container.go
+@@ -1302,6 +1302,7 @@ func (c *Container) plugDevice(ctx context.Context, devicePath string) error {
+ 	}
+ 
+ 	if c.checkBlockDeviceSupport(ctx) && stat.Mode&unix.S_IFBLK == unix.S_IFBLK {
++		var err error
+ 		b, err := c.sandbox.devManager.NewDevice(config.DeviceInfo{
+ 			HostPath:      devicePath,
+ 			ContainerPath: filepath.Join(kataGuestSharedDir(), c.id),
+@@ -1313,10 +1314,18 @@ func (c *Container) plugDevice(ctx context.Context, devicePath string) error {
+ 			return fmt.Errorf("device manager failed to create rootfs device for %q: %v", devicePath, err)
+ 		}
+ 
++		defer func() {
++			if err != nil {
++				if newErr := c.sandbox.devManager.RemoveDevice(b.DeviceID()); newErr != nil {
++					c.Logger().WithError(newErr).Error("fail rollback to remove block device")
++				}
++			}
++		}()
++
+ 		c.state.BlockDeviceID = b.DeviceID()
+ 
+ 		// attach rootfs device
+-		if err := c.sandbox.devManager.AttachDevice(ctx, b.DeviceID(), c.sandbox); err != nil {
++		if err = c.sandbox.devManager.AttachDevice(ctx, b.DeviceID(), c.sandbox); err != nil {
+ 			return err
+ 		}
+ 	}
+-- 
+2.25.1
+

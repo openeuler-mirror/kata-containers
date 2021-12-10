@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 18
+%define RELEASE 19
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Dec 10 2021 yangfeiyu <yangfeiyu2@huawei.com> - 2.1.0-19
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:modify stratovirt config file
+
 * Tue Dec 7 2021 jikui <jikui2@huawei.com> - 2.1.0-18
 - Type:bugfix
 - ID:NA

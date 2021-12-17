@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 11
+%define RELEASE 12
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -92,6 +92,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Fri Dec 17 2021 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-12
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix shimv2 exit problem
+
 * Sat Nov 27 2021 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-11
 - Type:enhancement
 - ID:NA

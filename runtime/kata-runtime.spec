@@ -1,7 +1,7 @@
 %define debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 12
+%define RELEASE 13
 
 Name:           kata-runtime
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 ./cli/config/configuration-qemu.toml %{buildroot}/usr/share/de
 /usr/share/defaults/kata-containers/configuration.toml
 
 %changelog
+* Fri Dec 17 2021 Lichang Zhao<zhaolichang@huawei.com> - 1.11.1-13
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix the problem that sandbox stratovirt with network devices fails to start
+
 * Sat Nov 27 2021 yangfeiyu<yangfeiyu20102011@163.com> - 1.11.1-12
 - Type:enhancement
 - ID:NA

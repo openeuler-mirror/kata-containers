@@ -1,0 +1,27 @@
+From fa77503ed5ad7c95ba1ec49a00341379320f53b9 Mon Sep 17 00:00:00 2001
+From: Lichang Zhao <zhaolichang@huawei.com>
+Date: Fri, 17 Dec 2021 16:49:03 +0800
+Subject: [PATCH] kata-runtime: fix the problem that sandbox stratovirt with
+ network devices fails to start
+
+Signed-off-by: Lichang Zhao <zhaolichang@huawei.com>
+---
+ runtime/virtcontainers/stratovirt.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/virtcontainers/stratovirt.go b/runtime/virtcontainers/stratovirt.go
+index 415718f..acf4cbf 100644
+--- a/virtcontainers/stratovirt.go
++++ b/virtcontainers/stratovirt.go
+@@ -158,7 +158,7 @@ func (s *stratovirt) startSandbox(timeout int) error {
+ 			name := v.Name()
+ 			mac := v.HardwareAddr()
+ 			tapName := v.NetworkPair().TapInterface.TAPIface.Name
+-			params = append(params, "-net", fmt.Sprintf("id=%s,mac=%s,host_dev_name=%s", name, mac, tapName))
++			params = append(params, "-netdev", fmt.Sprintf("id=%s,mac=%s,netdev=%s", name, mac, tapName))
+ 		case config.BlockDrive:
+ 			id := v.ID
+ 			path := v.File
+-- 
+2.27.0
+

@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 18
+%define RELEASE 19
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -55,10 +55,12 @@ make %{?_smp_mflags}
 
 cd %{_builddir}/kata_integration
 mkdir -p -m 750 build
+export GO111MODULE=off
 make runtime
 make proxy
 make shim
 make initrd
+cp -f ./runtime/containerd-shim-kata-v2 ./build/
 
 %install
 mkdir -p -m 755  %{buildroot}/var/lib/kata
@@ -91,6 +93,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Fri Jan 7 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-19
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:set GO111MODULE off for go version 1.17.3
+
 * Tue Nov 30 2021 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-18
 - Type:feature
 - ID:NA

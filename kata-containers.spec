@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 20
+%define RELEASE 21
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Tues Jan 11 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-21
+- Type:feature
+- ID:NA
+- SUG:NA
+- DESC:add stratovirt `vmConfig` struct and methods to get parameters of VM
+
 * Mon Jan 10 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-20
 - Type:feature
 - ID:NA

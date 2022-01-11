@@ -1,0 +1,235 @@
+From 37c4a009a6ea9028e237f849e7b27a15c602113e Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Tue, 11 Jan 2022 10:44:53 +0800
+Subject: [PATCH] stratovirt: add struct `vmConfig` and methods to get all
+ parameters of VM
+
+Defines `vmConfig` struct to containes all configuration items that
+virtual machine needs. Provides methods to get VM paramters,
+including name, UUID, cpu, memory, kernel, devices, etc.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/virtcontainers/stratovirt.go | 197 ++++++++++++++++++++++-
+ 1 file changed, 189 insertions(+), 8 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index e9b2ba8..7e32a8a 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -26,15 +26,196 @@ import (
+ )
+ 
+ const (
+-	apiSocket       = "qmp.socket"
+-	debugSocket     = "console.socket"
+-	ozoneBaseDir    = "/srv/ozone/stratovirt"
+-	defaultDummyMac = "22:33:44:aa:bb:"
+-	mmioBlkCount    = 4
+-	mmioNetCount    = 2
+-	randomDevice = "/dev/urandom"
++	defaultStratoVirt            = "/usr/bin/stratovirt"
++	ozoneBaseDir                 = "/srv/ozone/stratovirt"
++	defaultStratoVirtMachineType = "microvm"
++	defaultKernelParames         = "console=hvc0 reboot=k panic=1 agent.use_vsock=true ramdom.trust_cpu=on rw"
++	defaultMicroVMParames        = "pci=off iommu=off acpi=off"
++	apiSocket                    = "qmp.socket"
++	debugSocket                  = "console.socket"
++	virtiofsSocket               = "virtiofs_kata.sock"
++	iothreadID                   = "iothread_block"
++	mmioBlkCount                 = 4
++	mmioNetCount                 = 2
+ )
+ 
++const (
++	WaitSandboxTimeoutSecs              = 15
++	MachineTypeMicrovm                  = "microvm"
++)
++
++// VirtioDev is the StratoVirt device interface.
++type VirtioDev interface {
++	getParams(config *vmConfig) []string
++}
++
++type inComing struct {
++	path             string
++	bootFromTemplate bool
++}
++
++type Ozone struct {
++	ozoneRoot     string
++	ozoneRes      []string
++	consolePath   string
++	kernelPath    string
++	initrdPath    string
++	pidFile       string
++	logFile       string
++	qmpSocketPath string
++}
++
++// vmConfig keeps the custom settings and paramters to start virtual machine.
++type vmConfig struct {
++	name          string
++	uuid          string
++	machineType   string
++	vmPath        string
++	smp           uint32
++	memory        uint64
++	kernelPath    string
++	params        string
++	rootfsPath    string
++	initrdPath    string
++	rootBus       types.Bridge
++	devices       []VirtioDev
++	IOThread      bool
++	PFlash        []string
++	pidFile       string
++	logFile       string
++	qmpSocketPath govmmQemu.QMPSocket
++	consolePath   string
++	fsSockPath    string
++	incoming      inComing
++	daemonize     bool
++	useOzone      bool
++	Ozone         Ozone
++}
++
++func (c *vmConfig) appendName(params *[]string) {
++	if c.name == "" {
++		return
++	}
++	*params = append(*params, "-name", c.name)
++}
++
++func (c *vmConfig) appendUUID(params *[]string) {
++	if c.uuid == "" {
++		return
++	}
++	*params = append(*params, "-uuid", c.uuid)
++}
++
++func (c *vmConfig) appendMachine(params *[]string) {
++	if c.machineType == "" {
++		return
++	}
++	*params = append(*params, "-machine", fmt.Sprintf("type=%s,dump-guest-core=off,mem-share=on", c.machineType))
++}
++
++func (c *vmConfig) appendCPU(params *[]string) {
++	if c.smp == 0 {
++		return
++	}
++	*params = append(*params, "-smp", strconv.Itoa(int(c.smp)))
++}
++
++func (c *vmConfig) appendMemory(params *[]string) {
++	if c.memory == 0 {
++		return
++	}
++	*params = append(*params, "-m", strconv.Itoa(int(c.memory)))
++}
++
++func (c *vmConfig) appendKernel(params *[]string) {
++	var ozone Ozone
++	if c.kernelPath == "" {
++		return
++	}
++	
++	if c.useOzone {
++		ozone = c.Ozone
++		*params = append(*params, "-kernel", ozone.kernelPath)
++	} else {
++		*params = append(*params, "-kernel", c.kernelPath)
++	}
++
++	if c.initrdPath != "" {
++		if c.useOzone {
++			*params = append(*params, "-initrd", ozone.initrdPath)
++		} else {
++			*params = append(*params, "-initrd", c.initrdPath)
++		}
++	}
++
++	if c.params != "" {
++		*params = append(*params, "-append", c.params)
++	}
++}
++
++func (c *vmConfig) appendIOThreads(params *[]string) {
++	if c.IOThread {
++		*params = append(*params, "-object", fmt.Sprintf("iothread,id=%s", iothreadID))
++	}
++}
++
++func (c *vmConfig) appendDevices(params *[]string) {
++	for _, d := range c.devices {
++		*params = append(*params, d.getParams(c)...)
++	}
++}
++
++func (c *vmConfig) appendPFlash(params *[]string) {
++	for _, p := range c.PFlash {
++		if p != "" {
++			*params = append(*params, "-drive", p)
++		}
++	}
++}
++
++func (c *vmConfig) appendPidFile(params *[]string) {
++	if c.pidFile == "" {
++		return
++	}
++
++	if c.useOzone {
++		*params = append(*params, "-pidfile", c.Ozone.pidFile)
++	} else {
++		*params = append(*params, "-pidfile", c.pidFile)
++	}
++}
++
++func (c *vmConfig) appendLogFile(params *[]string) {
++	if c.logFile == "" {
++		return
++	}
++
++	if c.useOzone {
++		*params = append(*params, "-D", c.Ozone.logFile)
++	} else {
++		*params = append(*params, "-D", c.logFile)
++	}
++}
++
++func (c *vmConfig) appendQMPSocket(params *[]string) {
++	qmpInfo := c.qmpSocketPath
++	qmpParams := append([]string{}, fmt.Sprintf("%s:", qmpInfo.Type))
++	if c.useOzone {
++		qmpParams = append(qmpParams, c.Ozone.qmpSocketPath)
++	} else {
++		qmpParams = append(qmpParams, qmpInfo.Name)
++	}
++	qmpParams = append(qmpParams, ",server")
++	qmpParams = append(qmpParams, ",nowait")
++	*params = append(*params, "-qmp", strings.Join(qmpParams, ""))
++}
++
++func (c *vmConfig) appendIncoming(params *[]string) {
++	if c.incoming.path != "" && c.incoming.bootFromTemplate {
++		*params = append(*params, "-incoming", fmt.Sprintf("file:%s", c.incoming.path))
++	}
++}
++
+ type stratovirtDev struct {
+ 	dev     interface{}
+ 	devType deviceType
+@@ -208,7 +389,7 @@ func (s *stratovirt) createbaseParams() []string {
+ 	params = append(params, "-m", fmt.Sprintf("%d", uint64(s.config.MemorySize)))
+ 	params = append(params, "-device", "virtio-serial-device")
+ 	params = append(params, "-device", "virtconsole,chardev=charconsole0,id=virtioconsole0")
+-	params = append(params, "-object", fmt.Sprintf("rng-random,id=objrng0,filename=%s", randomDevice))
++	params = append(params, "-object", fmt.Sprintf("rng-random,id=objrng0,filename=%s", s.config.EntropySource))
+ 	params = append(params, "-device", "virtio-rng-device,rng=objrng0")
+ 
+ 	// daemonize
+-- 
+2.20.1.windows.1
+

@@ -1,0 +1,110 @@
+From 7a3578da1182222090200d99663d1741d2d77d64 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Mon, 17 Jan 2022 20:06:29 +0800
+Subject: [PATCH] kata-runtime: fix route add problem
+
+reason: when kata-network update-iface is called to clean NIC ip info,
+the guest os will clean the related routes with NIC, however the routes
+info in the persisit.json file is still left. So the followed add-route
+command add the same route will cause the problem.
+
+Signed-off-by: holyfei <yangfeiyu20092010@163.com>
+---
+ virtcontainers/network.go | 70 ++++---------------------------
+ 1 file changed, 7 insertions(+), 63 deletions(-)
+
+diff --git a/virtcontainers/network.go b/virtcontainers/network.go
+index 15eb790..a15a6d5 100644
+--- a/virtcontainers/network.go
++++ b/virtcontainers/network.go
+@@ -1643,45 +1643,16 @@ func isSameRoute(existing, r *netlink.Route, fuzzy bool) bool {
+ }
+ 
+ func addOneRoute(ns *NetworkNamespace, route *vcTypes.Route) (added *vcTypes.Route, err error) {
+-	add, err := generateAddRoute(route)
++	_, err = generateAddRoute(route)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 
+-	// add the route for "lo" loopback device
+-	if route.Device == localHostDeviceName {
+-		added = &vcTypes.Route{
+-			Dest:    route.Dest,
+-			Gateway: route.Gateway,
+-			Device:  route.Device,
+-		}
+-		return added, nil
+-	}
+-
+-	// add the route for exist network enpoints
+-	for _, ep := range ns.Endpoints {
+-		if ep.Name() != route.Device {
+-			continue
+-		}
+-
+-		netInfo := ep.Properties()
+-		for _, exist := range ep.Properties().Routes {
+-			if isSameRoute(&exist, add, false) {
+-				return nil, fmt.Errorf("route rule %v already exits", add)
+-			}
+-		}
+-		// flush the netInfo.Routes with new added route
+-		netInfo.Routes = append(netInfo.Routes, *add)
+-		ep.SetProperties(netInfo)
+-		added = &vcTypes.Route{
+-			Dest:    route.Dest,
+-			Gateway: route.Gateway,
+-			Device:  route.Device,
+-		}
+-		break
+-	}
+-
+-	return added, nil
++	return &vcTypes.Route{
++		Dest:    route.Dest,
++		Gateway: route.Gateway,
++		Device:  route.Device,
++	}, nil
+ }
+ 
+ func generateRmRoute(route *vcTypes.Route) (r *netlink.Route, err error) {
+@@ -1757,34 +1728,7 @@ func removeRoutes(ns *NetworkNamespace, route *vcTypes.Route) (removed []*vcType
+ 		return nil, err
+ 	}
+ 
+-	// remove the lo device related routes
+-	if route.Device == localHostDeviceName {
+-		removed = append(removed, parseToGrpcRoute(localHostDeviceName, del, false))
+-
+-		return removed, nil
+-	}
+-
+-	for _, ep := range ns.Endpoints {
+-		// if device is empty, means search every device
+-		if route.Device != "" && ep.Name() != route.Device {
+-			continue
+-		}
+-
+-		netInfo := ep.Properties()
+-		for i, exist := range ep.Properties().Routes {
+-			if isSameRoute(&exist, del, true) {
+-				// need remove
+-				netInfo.Routes = append(netInfo.Routes[:i], netInfo.Routes[i+1:]...)
+-				ep.SetProperties(netInfo)
+-				dev := route.Device
+-				if route.Device == "" {
+-					dev = netInfo.Iface.Name
+-				}
+-				removed = append(removed, parseToGrpcRoute(dev, del, false))
+-			}
+-		}
+-	}
+-
++	removed = append(removed, parseToGrpcRoute(route.Device, del, false))
+ 	return removed, nil
+ }
+ 
+-- 
+2.27.0
+

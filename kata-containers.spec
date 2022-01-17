@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 22
+%define RELEASE 23
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Mon Jan 17 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-23
+- Type:feature
+- ID:NA
+- SUG:NA
+- DESC:add the stratovirt standardVM sandbox type to kata container
+
 * Thur Jan 13 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-22
 - Type:feature
 - ID:NA

@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 8
+%define RELEASE 9
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -90,6 +90,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Mon Jan 17 2022 yangfeiyu<yangfeiyu2@huawei.com> - 1.11.1-9
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix route add failed problem
+
 * Tue Feb 23 2021 xinghe <xinghe1@huawei.com> - 1.11.1-8
 - Type:CVE
 - ID:NA

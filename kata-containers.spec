@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 19
+%define RELEASE 20
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -93,6 +93,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Mon Feb 21 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-20
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:check file size before add nic
+
 * Fri Jan 7 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-19
 - Type:bugfix
 - ID:NA

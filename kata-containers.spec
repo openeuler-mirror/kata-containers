@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 21
+%define RELEASE 22
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Mon Feb 28 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-22
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:use host_device drive when call blockdev-add
+
 * Fri Feb 25 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-21
 - Type:enhancement
 - ID:NA

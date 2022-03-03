@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 22
+%define RELEASE 23
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Thu Mar 3 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-23
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:modify runtime build flags
+
 * Mon Feb 28 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-22
 - Type:enhancement
 - ID:NA

@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 24
+%define RELEASE 25
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Tues Mar 2 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-25
+- Type:feature
+- ID:NA
+- SUG:NA
+- DESC:provide a way to dynomically obtain firmware in stratovirt
+
 * Sat Feb 26 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-24
 - Type:bugfix
 - ID:NA

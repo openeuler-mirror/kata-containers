@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 25
+%define RELEASE 26
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Mar 18 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-26
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:fix startup failure that adding more than 16 root port devices in stratovirt
+
 * Tues Mar 2 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-25
 - Type:feature
 - ID:NA

@@ -2,13 +2,13 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 11
+%define RELEASE 12
 
 Name:           kata-containers
 Version:        %{VERSION}
 Release:        %{RELEASE}
 Summary:        Kata Container, the speed of containers, the security of VMs
-License:        Apache 2.0
+License:        ISC and Apache-2.0 and GPL-2.0-or-later and CC-BY-SA-4.0 and MIT and MPL-2.0
 URL:            https://github.com/kata-containers
 Source0:        kata_integration-v1.0.0.tar.gz
 Source1:        kata-containers-%{version}.tar.gz
@@ -91,6 +91,9 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Tue May 17 2022 liukuo <liukuo@kylinos.cn> - v1.11.1-12
+- License compliance rectification
+
 * Wed Apr 13 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-11
 - Type:bugfix
 - ID:NA

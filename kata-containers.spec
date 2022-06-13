@@ -105,13 +105,13 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 - SUG:NA
 - DESC:bump version to 18
 
-* Wed June 16 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-17
+* Wed Jun 16 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-17
 - Type:bugfix
 - ID:NA
 - SUG:NA
 - DESC:move timeout of waitProcess to stop process
 
-* Thu June 3 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-16
+* Thu Jun 3 2021 gaohuatao <gaohuatao@huawei.com> - 1.11.1-16
 - Type:bugfix
 - ID:NA
 - SUG:NA
@@ -141,7 +141,7 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 - SUG:NA
 - DESC:add linkmode to resolve build error
 
-* Thu Mar 17 2021 jikui <jikui2@huawei.com> - 1.11.1-11
+* Wed Mar 17 2021 jikui <jikui2@huawei.com> - 1.11.1-11
 - Type:enhancement
 - ID:NA
 - SUG:NA

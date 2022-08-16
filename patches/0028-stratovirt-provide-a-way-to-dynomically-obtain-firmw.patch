@@ -1,0 +1,78 @@
+From 769af40220ea3d7b87173f11c135e651076e14ee Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Wed, 2 Mar 2022 09:41:49 +0800
+Subject: [PATCH] stratovirt: provide a way to dynomically obtain firmware
+
+For stratovirt, it requires firmware to boot. The default
+path is `/usr/share/edk2/xxx/pflash`. Now, we provides a
+way to set path in configuration.toml file
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/cli/config/configuration-stratovirt.toml.in | 4 ++++
+ src/runtime/pkg/katautils/config.go                     | 6 ++++++
+ src/runtime/virtcontainers/stratovirt.go                | 7 ++++---
+ 3 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/src/runtime/cli/config/configuration-stratovirt.toml.in b/src/runtime/cli/config/configuration-stratovirt.toml.in
+index db46665..519c390 100644
+--- a/src/runtime/cli/config/configuration-stratovirt.toml.in
++++ b/src/runtime/cli/config/configuration-stratovirt.toml.in
+@@ -28,6 +28,10 @@ enable_annotations = @DEFENABLEANNOTATIONS@
+ # Your distribution recommends: @STRATOVIRTVALIDHYPERVISORPATHS@
+ valid_hypervisor_paths = @STRATOVIRTVALIDHYPERVISORPATHS@
+ 
++# Path to the firmware.
++# If you want that qemu uses the default firmware leave this option empty
++firmware = "@FIRMWAREPATH@"
++
+ # Path for the ozone specific to stratovirt
+ # If the ozone path is set, stratovirt will be launched in 
+ # ozone secure environment. It is disabled by default.
+diff --git a/src/runtime/pkg/katautils/config.go b/src/runtime/pkg/katautils/config.go
+index b04cdee..cdc9d7a 100644
+--- a/src/runtime/pkg/katautils/config.go
++++ b/src/runtime/pkg/katautils/config.go
+@@ -951,6 +951,11 @@ func newStratovirtHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 			errors.New("either image or initrd must be defined in the configuration file")
+ 	}
+ 
++	firmware, err := h.firmware()
++	if err != nil {
++		return vc.HypervisorConfig{}, err
++	}
++
+ 	kernelParams := h.kernelParams()
+ 	machineType := h.machineType()
+ 
+@@ -979,6 +984,7 @@ func newStratovirtHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		KernelPath:              kernel,
+ 		InitrdPath:              initrd,
+ 		ImagePath:               image,
++		FirmwarePath:            firmware,
+ 		OzonePath:               ozone,
+ 		KernelParams:            vc.DeserializeParams(strings.Fields(kernelParams)),
+ 		HypervisorMachineType:   machineType,
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index 27b45b7..d2b2233 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -659,11 +659,12 @@ func (s *stratovirt) getKernelParams(machineType string, initrdPath string) (str
+ }
+ 
+ func (s *stratovirt) getPFlash(machineType string) ([]string, error) {
+-	if s.config.PFlash != nil {
+-		return s.config.PFlash, nil
++	var PFlash []string
++	if s.config.FirmwarePath != "" {
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", s.config.FirmwarePath))
++		return PFlash, nil
+ 	}
+ 
+-	var PFlash []string
+ 	switch machineType {
+ 	case MachineTypeQ35:
+ 		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", Q35PFlashCode))
+-- 
+2.20.1.windows.1
+

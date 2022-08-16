@@ -1,0 +1,33 @@
+From b654687f88281d1dfbbb6c8ede65aa53ec105122 Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Fri, 5 Nov 2021 11:55:24 +0800
+Subject: [PATCH] kata-runtime: fix umount container rootfs dir return invalid
+ argument error
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ src/runtime/virtcontainers/container.go | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/container.go b/src/runtime/virtcontainers/container.go
+index 6e8e1ba..224f096 100644
+--- a/src/runtime/virtcontainers/container.go
++++ b/src/runtime/virtcontainers/container.go
+@@ -1035,8 +1035,12 @@ func (c *Container) stop(ctx context.Context, force bool) error {
+ 		return err
+ 	}
+ 
+-	if err := bindUnmountContainerRootfs(ctx, getMountPath(c.sandbox.id), c.id); err != nil && !force {
+-		return err
++	// umount container rootfs dir only if container use 9p
++	// to bind mount host container rootfs to 9p shared dir
++	if c.state.BlockDeviceID == "" {
++		if err := bindUnmountContainerRootfs(c.ctx, getMountPath(c.sandbox.id), c.id); err != nil && !force {
++			return err
++		}
+ 	}
+ 
+ 	if err := c.detachDevices(ctx); err != nil && !force {
+-- 
+2.25.1
+

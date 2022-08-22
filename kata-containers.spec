@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 26
+%define RELEASE 27
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Mon Aug 22 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-27
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:use host device when adding block dev
+
 * Fri Mar 18 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-26
 - Type:bugfix
 - ID:NA

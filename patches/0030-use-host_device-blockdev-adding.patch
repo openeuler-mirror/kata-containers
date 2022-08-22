@@ -1,0 +1,38 @@
+From 2da8be5657f219de41e11917cb916895934749b8 Mon Sep 17 00:00:00 2001
+From: chengzrz <czrzrichard@gmail.com>
+Date: Mon, 22 Aug 2022 19:19:52 +0800
+Subject: [PATCH] use host_device blockdev adding
+
+ExecuteBlockdevAdd() and ExecuteBlockdevAddWithCache() both appear to be
+intended to create block devices in the guest which backend onto a block
+device in the host. That seems to be the way that Kata always uses it.
+However blockdevAddBaseArgs(), used by both those functions always uses the
+"file" driver, which is only intended for use with regular file backends.
+
+Use of the "file" driver for host block devices was deprecated in qemu-3.0,
+and has been removed entirely in qemu-6.0 (commit 8d17adf34f5).  We should
+be using the "host_device" driver instead.
+
+reference: https://github.com/kata-containers/kata-containers/commit/1b021929864fa45b643d9603d6615cc4b86235d7
+
+Signed-off-by: chengzrz <czrzrichard@gmail.com>
+---
+ src/runtime/vendor/github.com/kata-containers/govmm/qemu/qmp.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/runtime/vendor/github.com/kata-containers/govmm/qemu/qmp.go b/src/runtime/vendor/github.com/kata-containers/govmm/qemu/qmp.go
+index 97e924559..0e0337dbf 100644
+--- a/src/runtime/vendor/github.com/kata-containers/govmm/qemu/qmp.go
++++ b/src/runtime/vendor/github.com/kata-containers/govmm/qemu/qmp.go
+@@ -775,7 +775,7 @@ func (q *QMP) blockdevAddBaseArgs(device, blockdevID string, ro bool) (map[strin
+ 		"driver":    "raw",
+ 		"read-only": ro,
+ 		"file": map[string]interface{}{
+-			"driver":   "file",
++			"driver":   "host_device",
+ 			"filename": device,
+ 		},
+ 	}
+-- 
+2.25.1
+

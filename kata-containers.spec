@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 27
+%define RELEASE 28
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Tue Aug 23 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-28
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:add explicit on for kernel_irqchip
+
 * Mon Aug 22 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-27
 - Type:bugfix
 - ID:NA

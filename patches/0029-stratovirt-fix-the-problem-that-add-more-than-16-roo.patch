@@ -1,0 +1,95 @@
+From c455ef6f406ba317af76b48ff79db131d0594bc1 Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Fri, 18 Mar 2022 10:49:35 +0800
+Subject: [PATCH] stratovirt: fix the problem that add more than 16 root port
+ devices
+
+It will failed to start StratoVirt sandbox if pcie root prot is set
+more than 16. The reason is that StratoVirt can only distinguish
+hexadecimal device address number.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/virtcontainers/stratovirt.go | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index d2b2233..98a702a 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -102,7 +102,7 @@ func (r rootPortDevice) getParams(config *vmConfig) []string {
+ 		r.bus = "pcie.0"
+ 	}
+ 	devParams = append(devParams, Param{"bus", r.bus})
+-	devParams = append(devParams, Param{"addr", fmt.Sprintf("%d", r.slot)})
++	devParams = append(devParams, Param{"addr", fmt.Sprintf("0x%x", r.slot)})
+ 
+ 	driver := "pcie-root-port"
+ 	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
+@@ -721,6 +721,9 @@ func (s *stratovirt) createDevices() []VirtioDev {
+ 
+ func (s *stratovirt) appendRootPort(ctx context.Context, devices []VirtioDev) []VirtioDev {
+ 	number := s.config.PCIeRootPort
++	if number > 20 {
++		number = 20
++	}
+ 
+ 	for i := uint32(1); i < number+1; i++ {
+ 		addr, err := s.vmConfig.rootBus.AddDevice(ctx, fmt.Sprintf("%s.%d", RootPortPrefix, i))
+@@ -765,7 +768,7 @@ func (s *stratovirt) appendBlock(ctx context.Context, devices []VirtioDev) []Vir
+ 		filePath: s.vmConfig.rootfsPath,
+ 		deviceID: "virtio-blk0",
+ 		bus:      bus,
+-		addr:     fmt.Sprintf("%d", addr),
++		addr:     fmt.Sprintf("0x%x", addr),
+ 		iothread: iothread,
+ 	})
+ 
+@@ -791,7 +794,7 @@ func (s *stratovirt) appendRng(ctx context.Context, devices []VirtioDev) []Virti
+ 		rng:      "objrng0",
+ 		deviceID: "virtio-rng0",
+ 		bus:      bus,
+-		addr:     fmt.Sprintf("%d", addr),
++		addr:     fmt.Sprintf("0x%x", addr),
+ 	})
+ 
+ 	return devices
+@@ -818,7 +821,7 @@ func (s *stratovirt) appendConsole(ctx context.Context, devices []VirtioDev) []V
+ 		charDev:  "charconsole0",
+ 		deviceID: "virtio-console0",
+ 		bus:      bus,
+-		addr:     fmt.Sprintf("%d", addr),
++		addr:     fmt.Sprintf("0x%x", addr),
+ 	})
+ 
+ 	return devices
+@@ -841,7 +844,7 @@ func (s *stratovirt) appendVhostVsock(ctx context.Context, devices []VirtioDev,
+ 		id:      "vsock-id",
+ 		guestID: fmt.Sprintf("%d", vsock.ContextID),
+ 		bus:     bus,
+-		addr:    fmt.Sprintf("%d", addr),
++		addr:    fmt.Sprintf("0x%x", addr),
+ 	})
+ 
+ 	return devices
+@@ -872,7 +875,7 @@ func (s *stratovirt) appendNetwork(ctx context.Context, devices []VirtioDev, end
+ 		deviceID: name,
+ 		bus:      bus,
+ 		mac:      endpoint.HardwareAddr(),
+-		addr:     fmt.Sprintf("%d", addr),
++		addr:     fmt.Sprintf("0x%x", addr),
+ 	})
+ 
+ 	return devices
+@@ -904,7 +907,7 @@ func (s *stratovirt) appendVirtioFs(ctx context.Context, devices []VirtioDev, vo
+ 		tag:      volume.MountTag,
+ 		deviceID: "virtio-fs0",
+ 		bus:      bus,
+-		addr:     fmt.Sprintf("%d", addr),
++		addr:     fmt.Sprintf("0x%x", addr),
+ 	})
+ 
+ 	return devices
+-- 
+2.20.1.windows.1
+

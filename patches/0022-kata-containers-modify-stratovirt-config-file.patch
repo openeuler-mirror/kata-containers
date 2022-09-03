@@ -1,0 +1,40 @@
+From c9e8df6902ecd72223a3837de953233f00f94093 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Fri, 10 Dec 2021 09:43:30 +0800
+Subject: [PATCH] kata-containers: modify stratovirt config file
+
+Signed-off-by: holyfei <yangfeiyu20092010@163.com>
+---
+ src/runtime/Makefile                                    | 2 +-
+ src/runtime/cli/config/configuration-stratovirt.toml.in | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/runtime/Makefile b/src/runtime/Makefile
+index 68e60ee..ff93ab3 100644
+--- a/src/runtime/Makefile
++++ b/src/runtime/Makefile
+@@ -293,7 +293,7 @@ ifneq (,$(STRATOVIRTCMD))
+ 
+ 	# stratovirt-specific options (all should be suffixed by "_STRATOVIRT")
+ 	DEFBLOCKSTORAGEDRIVER_STRATOVIRT := virtio-mmio
+-	DEFNETWORKMODEL_STRATOVIRT := none
++	DEFNETWORKMODEL_STRATOVIRT := tcfilter
+ 	KENRELTYPE_STRATOVIRT = uncompressed
+ 	KERNELPATH_STRATOVIRT = $(KERNEL_PATH)
+ endif
+diff --git a/src/runtime/cli/config/configuration-stratovirt.toml.in b/src/runtime/cli/config/configuration-stratovirt.toml.in
+index b557b71..753e3dc 100644
+--- a/src/runtime/cli/config/configuration-stratovirt.toml.in
++++ b/src/runtime/cli/config/configuration-stratovirt.toml.in
+@@ -13,7 +13,7 @@
+ [hypervisor.stratovirt]
+ path = "@STRATOVIRTPATH@"
+ kernel = "@KERNELPATH_STRATOVIRT@"
+-image = "@IMAGEPATH@"
++initrd = "@IMAGEPATH@"
+ 
+ # List of valid annotation names for the hypervisor
+ # Each member of the list is a regular expression, which is the base name
+-- 
+2.27.0
+

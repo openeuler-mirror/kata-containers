@@ -1,0 +1,33 @@
+From 0c9c5ca20b6aeae5e550decfd3540b389fb02cb5 Mon Sep 17 00:00:00 2001
+From: chengzrz <czrzrichard@gmail.com>
+Date: Tue, 23 Aug 2022 15:30:05 +0800
+Subject: [PATCH] add explicit on after kernel_irqchip
+Kata uses the 'kernel_irqchip' machine option to qemu.  By default it
+uses it in what qemu calls the "short-form boolean" with no parameter.
+That style was deprecated by qemu between 5.2 and 6.0 (commit
+ccd3b3b8112b) and effectively removed entirely between 6.0 and 6.1
+(commit d8fb7d0969d5).
+
+reference:https://github.com/kata-containers/kata-containers/commit/316509566966e4c9b3fd9ba3521554b384fdbf88
+
+Signed-off-by: chengzrz <czrzrichard@gmail.com>
+---
+ src/runtime/virtcontainers/qemu_amd64.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/runtime/virtcontainers/qemu_amd64.go b/src/runtime/virtcontainers/qemu_amd64.go
+index 1a045fae0..bc598c653 100644
+--- a/src/runtime/virtcontainers/qemu_amd64.go
++++ b/src/runtime/virtcontainers/qemu_amd64.go
+@@ -27,7 +27,7 @@ const (
+ 
+ 	defaultQemuMachineType = QemuPC
+ 
+-	defaultQemuMachineOptions = "accel=kvm,kernel_irqchip"
++	defaultQemuMachineOptions = "accel=kvm,kernel_irqchip=on"
+ 
+ 	qmpMigrationWaitTimeout = 5 * time.Second
+ )
+-- 
+2.25.1
+

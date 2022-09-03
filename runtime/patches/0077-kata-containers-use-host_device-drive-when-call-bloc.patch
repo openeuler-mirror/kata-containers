@@ -1,0 +1,41 @@
+From 17cb805ec270d069f46e4138fc039d714cb381f1 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Mon, 28 Feb 2022 10:22:40 +0800
+Subject: [PATCH] kata-containers: use host_device drive when call blockdev-add
+
+reason: use host_device drive when call blockdev-add
+
+Signed-off-by: holyfei <yangfeiyu20092010@163.com>
+---
+ vendor/github.com/intel/govmm/qemu/qmp.go | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/vendor/github.com/intel/govmm/qemu/qmp.go b/vendor/github.com/intel/govmm/qemu/qmp.go
+index 0cb82ff..1d6d9c6 100644
+--- a/vendor/github.com/intel/govmm/qemu/qmp.go
++++ b/vendor/github.com/intel/govmm/qemu/qmp.go
+@@ -781,7 +781,7 @@ func (q *QMP) blockdevAddBaseArgs(device, blockdevID string) (map[string]interfa
+ 	blockdevArgs := map[string]interface{}{
+ 		"driver": "raw",
+ 		"file": map[string]interface{}{
+-			"driver":   "file",
++			"driver":   "host_device",
+ 			"filename": device,
+ 		},
+ 	}
+@@ -972,9 +972,9 @@ func (q *QMP) ExecuteNetdevAdd(ctx context.Context, netdevType, netdevID, ifname
+ // Must be valid QMP identifier.
+ func (q *QMP) ExecuteNetdevChardevAdd(ctx context.Context, netdevType, netdevID, chardev string, vhostforce bool, queues int) error {
+ 	args := map[string]interface{}{
+-		"type":    netdevType,
+-		"id":      netdevID,
+-		"chardev": chardev,
++		"type":       netdevType,
++		"id":         netdevID,
++		"chardev":    chardev,
+ 		"vhostforce": vhostforce,
+ 	}
+ 	if queues > 1 {
+-- 
+2.27.0
+

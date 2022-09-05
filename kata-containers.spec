@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 28
+%define RELEASE 29
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Fri Sep 2 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-29
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:don't use props for object add
+
 * Tue Aug 23 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-28
 - Type:bugfix
 - ID:NA

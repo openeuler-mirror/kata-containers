@@ -1,0 +1,33 @@
+From 39ac2f6929aea7e404c4597683e43fba7949964c Mon Sep 17 00:00:00 2001
+From: jikui <jikui2@huawei.com>
+Date: Tue, 30 Nov 2021 11:47:36 +0800
+Subject: [PATCH] kata-runtime: do not ignore updateInterface return error
+
+Signed-off-by: jikui <jikui2@huawei.com>
+---
+ src/runtime/virtcontainers/kata_agent.go | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/runtime/virtcontainers/kata_agent.go b/src/runtime/virtcontainers/kata_agent.go
+index 607f1c8..19d09bb 100644
+--- a/src/runtime/virtcontainers/kata_agent.go
++++ b/src/runtime/virtcontainers/kata_agent.go
+@@ -620,7 +620,15 @@ func (k *kataAgent) updateInterface(ctx context.Context, ifc *pbTypes.Interface)
+ 			"interface-requested": fmt.Sprintf("%+v", ifc),
+ 			"resulting-interface": fmt.Sprintf("%+v", resultingInterface),
+ 		}).WithError(err).Error("update interface request failed")
++		return nil, err
++	}
++
++	// need to judege resultingInterface is not nil, otherwise may cause
++	// deference nil pointer panic problem
++	if resultingInterface == nil {
++		return nil, fmt.Errorf("resultingInterface should not be nil")
+ 	}
++
+ 	if resultInterface, ok := resultingInterface.(*pbTypes.Interface); ok {
+ 		return resultInterface, err
+ 	}
+-- 
+2.25.1
+

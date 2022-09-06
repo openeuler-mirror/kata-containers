@@ -1,0 +1,243 @@
+From 1f83147653208f01effab0cf89209b8454d15f03 Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Mon, 10 Jan 2022 10:49:44 +0800
+Subject: [PATCH 1/5] stratovirt: update configuration toml file
+
+1.Adapt to default machine type as microvm.
+2.Add more configuration items.
+3.Modify toml file format.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/Makefile                          |  2 +
+ .../config/configuration-stratovirt.toml.in   | 67 ++++++++++++-------
+ 2 files changed, 46 insertions(+), 23 deletions(-)
+
+diff --git a/src/runtime/Makefile b/src/runtime/Makefile
+index ff93ab3..bade196 100644
+--- a/src/runtime/Makefile
++++ b/src/runtime/Makefile
+@@ -292,6 +292,7 @@ ifneq (,$(STRATOVIRTCMD))
+ 	CONFIGS += $(CONFIG_STRATOVIRT)
+ 
+ 	# stratovirt-specific options (all should be suffixed by "_STRATOVIRT")
++	DEFMACHINETYPE_STRATOVIRT := microvm
+ 	DEFBLOCKSTORAGEDRIVER_STRATOVIRT := virtio-mmio
+ 	DEFNETWORKMODEL_STRATOVIRT := tcfilter
+ 	KENRELTYPE_STRATOVIRT = uncompressed
+@@ -437,6 +438,7 @@ USER_VARS += FIRMWAREPATH
+ USER_VARS += MACHINEACCELERATORS
+ USER_VARS += CPUFEATURES
+ USER_VARS += DEFMACHINETYPE_CLH
++USER_VARS += DEFMACHINETYPE_STRATOVIRT
+ USER_VARS += KERNELPARAMS
+ USER_VARS += LIBEXECDIR
+ USER_VARS += LOCALSTATEDIR
+diff --git a/src/runtime/cli/config/configuration-stratovirt.toml.in b/src/runtime/cli/config/configuration-stratovirt.toml.in
+index 753e3dc..db46665 100644
+--- a/src/runtime/cli/config/configuration-stratovirt.toml.in
++++ b/src/runtime/cli/config/configuration-stratovirt.toml.in
+@@ -14,6 +14,8 @@
+ path = "@STRATOVIRTPATH@"
+ kernel = "@KERNELPATH_STRATOVIRT@"
+ initrd = "@IMAGEPATH@"
++#image = "/var/lib/kata/kata-containers-rootfs.img"
++machine_type = "@DEFMACHINETYPE_STRATOVIRT@"
+ 
+ # List of valid annotation names for the hypervisor
+ # Each member of the list is a regular expression, which is the base name
+@@ -29,12 +31,12 @@ valid_hypervisor_paths = @STRATOVIRTVALIDHYPERVISORPATHS@
+ # Path for the ozone specific to stratovirt
+ # If the ozone path is set, stratovirt will be launched in 
+ # ozone secure environment. It is disabled by default.
+-# ozone_path = "@STRATOVIRTOZONEPATH@"
++#ozone_path = "@STRATOVIRTOZONEPATH@"
+ 
+ # List of valid ozone path values for the hypervisor
+ # Each member of the list can be a regular expression
+ # The default if not set is empty (all annotations rejected.)
+-# valid_jailer_paths = @STRATOVIRTVALIDOZONEPATHS@
++#valid_jailer_paths = @STRATOVIRTVALIDOZONEPATHS@
+ 
+ # Optional space-separated list of options to pass to the guest kernel.
+ # For example, use `kernel_params = "vsyscall=emulate"` if you are having
+@@ -87,18 +89,18 @@ default_bridges = @DEFBRIDGES@
+ # Default memory size in MiB for SB/VM.
+ # If unspecified then it will be set @DEFMEMSZ@ MiB.
+ default_memory = @DEFMEMSZ@
+-#
++
+ # Default memory slots per SB/VM.
+ # If unspecified then it will be set @DEFMEMSLOTS@.
+ # This is will determine the times that memory will be hotadded to sandbox/VM.
+-# memory_slots = @DEFMEMSLOTS@
++#memory_slots = @DEFMEMSLOTS@
+ 
+ # The size in MiB will be plused to max memory of hypervisor.
+ # It is the memory address space for the NVDIMM devie.
+ # If set block storage driver (block_device_driver) to "nvdimm",
+ # should set memory_offset to the size of block device.
+ # Default 0
+-# memory_offset = 0
++#memory_offset = 0
+ 
+ # Disable block device from being used for a container's rootfs.
+ # In case of a storage driver like devicemapper where a container's
+@@ -108,6 +110,14 @@ default_memory = @DEFMEMSZ@
+ # 9pfs is used instead to pass the rootfs.
+ disable_block_device_use = @DEFDISABLEBLOCK@
+ 
++# Shared file system type:
++#   - virtio-fs (default)
++#   - virtio-9p
++shared_fs = "virtio-fs"
++
++# Path to vhost-user-fs daemon.
++virtio_fs_daemon = "/usr/bin/vhost_user_fs"
++
+ # Block storage driver to be used for the hypervisor in case the container
+ # rootfs is backed by a block device. This is virtio-scsi, virtio-blk
+ # or nvdimm.
+@@ -120,12 +130,17 @@ block_device_driver = "@DEFBLOCKSTORAGEDRIVER_STRATOVIRT@"
+ # Specifies cache-related options for block devices.
+ # Denotes whether use of O_DIRECT (bypass the host page cache) is enabled.
+ # Default false
+-# block_device_cache_direct = true
++#block_device_cache_direct = true
+ 
+ # Specifies cache-related options for block devices.
+ # Denotes whether flush requests for the device are ignored.
+ # Default false
+-# block_device_cache_noflush = true
++#block_device_cache_noflush = true
++
++# Enable iothreads to be used. This causes IO to be
++# handled in a separate IO thread. This is currently only implemented
++# for virtio blk.
++#enable_iothreads = true
+ 
+ # Enable pre allocation of VM RAM, default false
+ # Enabling this will result in lower container density
+@@ -134,7 +149,7 @@ block_device_driver = "@DEFBLOCKSTORAGEDRIVER_STRATOVIRT@"
+ # upfront or in the cases where you want memory latencies
+ # to be very predictable
+ # Default false
+-# enable_mem_prealloc = true
++#enable_mem_prealloc = true
+ 
+ # Enable huge pages for VM RAM, default false
+ # Enabling this will result in the VM memory
+@@ -142,42 +157,48 @@ block_device_driver = "@DEFBLOCKSTORAGEDRIVER_STRATOVIRT@"
+ # This is useful when you want to use vhost-user network
+ # stacks within the container. This will automatically
+ # result in memory pre allocation
+-# enable_hugepages = true
++#enable_hugepages = true
+ 
+ # Enable vIOMMU, default false
+ # Enabling this will result in the VM having a vIOMMU device
+ # This will also add the following options to the kernel's
+ # command line: intel_iommu=on,iommu=pt
+-# enable_iommu = true
++#enable_iommu = true
+ 
+ # Enable swap of vm memory. Default false.
+ # The behaviour is undefined if mem_prealloc is also set to true
+-# enable_swap = true
++#enable_swap = true
+ 
+ # This option changes the default hypervisor and kernel parameters
+ # to enable debug output where available.
+ #
+ # Default false
+-# enable_debug = true
++#enable_debug = true
+ 
+ # Disable the customizations done in the runtime when it detects
+ # that it is running on top a VMM. This will result in the runtime
+ # behaving as it would when running on bare metal.
+ #
+-# disable_nesting_checks = true
++#disable_nesting_checks = true
+ 
+ # This is the msize used for 9p shares. It is the number of bytes
+ # used for 9p packet payload.
+-# msize_9p =
++#msize_9p =
+ 
+ # VFIO devices are hotplugged on a bridge by default.
+ # Enable hotplugging on root bus. This may be required for devices with
+ # a large PCI bar, as this is a current limitation with hotplugging on
+ # a bridge.
+ # Default false
+-# hotplug_vfio_on_root_bus = true
++#hotplug_vfio_on_root_bus = true
++
++# Before hot plugging a PCIe device, you need to add a pcie_root_port device.
++# Use this parameter when using some large PCI bar devices, such as Nvidia GPU
++# The value means the number of pcie_root_port
++# This value is valid when hotplug_vfio_on_root_bus is true and machine_type is "q35"
++# Default 0
++pcie_root_port = 2
+ 
+-#
+ # Default entropy source.
+ # The path to a host source of entropy (including a real hardware RNG)
+ # /dev/urandom and /dev/random are two main options.
+@@ -187,7 +208,7 @@ block_device_driver = "@DEFBLOCKSTORAGEDRIVER_STRATOVIRT@"
+ # The source of entropy /dev/urandom is non-blocking and provides a
+ # generally acceptable source of entropy. It should work well for pretty much
+ # all practical purposes.
+-# entropy_source= ""
++entropy_source= "@DEFENTROPYSOURCE@"
+ 
+ # List of valid annotations values for entropy_source
+ # The default if not set is empty (all annotations rejected.)
+@@ -209,7 +230,7 @@ valid_entropy_sources = @DEFVALIDENTROPYSOURCES@
+ # https://github.com/opencontainers/runtime-spec/blob/v1.0.1/config.md#posix-platform-hooks
+ # Warnings will be logged if any error is encountered will scanning for hooks,
+ # but it will not abort container execution.
+-# guest_hook_path = "/usr/share/oci/hooks"
++#guest_hook_path = "/usr/share/oci/hooks"
+ 
+ [factory]
+ # VM templating support. Once enabled, new VMs are created from template
+@@ -312,14 +333,14 @@ path = "@NETMONPATH@"
+ #     Uses tc filter rules to redirect traffic from the network interface
+ #     provided by plugin to a tap interface connected to the VM.
+ #
+-internetworking_model="@DEFNETWORKMODEL_STRATOVIRT@"
++internetworking_model = "@DEFNETWORKMODEL_STRATOVIRT@"
+ 
+ # disable guest seccomp
+ # Determines whether container seccomp profiles are passed to the virtual
+ # machine and applied by the kata agent. If set to true, seccomp is not applied
+ # within the guest
+ # (default: true)
+-disable_guest_seccomp=@DEFDISABLEGUESTSECCOMP@
++disable_guest_seccomp = @DEFDISABLEGUESTSECCOMP@
+ 
+ # If enabled, the runtime will create opentracing.io traces and spans.
+ # (See https://www.jaegertracing.io/docs/getting-started).
+@@ -352,15 +373,15 @@ disable_guest_seccomp=@DEFDISABLEGUESTSECCOMP@
+ # The sandbox cgroup path is the parent cgroup of a container with the PodSandbox annotation.
+ # The sandbox cgroup is constrained if there is no container type annotation.
+ # See: https://godoc.org/github.com/kata-containers/runtime/virtcontainers#ContainerType
+-sandbox_cgroup_only=@DEFSANDBOXCGROUPONLY@
++sandbox_cgroup_only = @DEFSANDBOXCGROUPONLY@
+ 
+ # Enabled experimental feature list, format: ["a", "b"].
+ # Experimental features are features not stable enough for production,
+ # they may break compatibility, and are prepared for a big version bump.
+ # Supported experimental features:
+ # (default: [])
+-experimental=@DEFAULTEXPFEATURES@
++experimental = @DEFAULTEXPFEATURES@
+ 
+ # If enabled, user can run pprof tools with shim v2 process through kata-monitor.
+ # (default: false)
+-# enable_pprof = true
++#enable_pprof = true
+-- 
+2.20.1.windows.1
+

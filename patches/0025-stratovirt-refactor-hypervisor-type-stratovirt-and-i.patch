@@ -1,0 +1,1449 @@
+From 21b077875f35b92335dfa2891542ec2e418c386c Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Thu, 13 Jan 2022 09:39:27 +0800
+Subject: [PATCH] stratovirt: refactor hypervisor type `stratovirt` and its
+ methods
+
+1.For more flexible management of VM state and config, move parameters
+to `State` and `vmConfig` struct.
+2.Update `createSandbox()` and `startSandbox()` for further
+encapsulation functions.
+3.Create device structs and methods to store deivce data.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/virtcontainers/stratovirt.go | 1096 ++++++++++++++++------
+ 1 file changed, 784 insertions(+), 312 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index 7e32a8a..4fcfb94 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -7,6 +7,7 @@ import (
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"runtime"
+ 	"strconv"
+ 	"strings"
+ 	"syscall"
+@@ -18,6 +19,7 @@ import (
+ 
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/device/config"
+ 	persistapi "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/persist/api"
++	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/uuid"
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
+ 	"go.opentelemetry.io/otel"
+@@ -42,6 +44,8 @@ const (
+ const (
+ 	WaitSandboxTimeoutSecs              = 15
+ 	MachineTypeMicrovm                  = "microvm"
++	MmioBus                VirtioDriver = "mmio"
++	PciBus                 VirtioDriver = "pci"
+ )
+ 
+ // VirtioDev is the StratoVirt device interface.
+@@ -49,6 +53,281 @@ type VirtioDev interface {
+ 	getParams(config *vmConfig) []string
+ }
+ 
++type VirtioDriver string
++
++func (d VirtioDriver) getDriver(config *vmConfig) VirtioDriver {
++	switch runtime.GOARCH {
++	case "amd64", "arm64":
++		if config != nil && config.machineType == MachineTypeMicrovm {
++			return MmioBus
++		}
++		return PciBus
++	default:
++		return MmioBus
++	}
++}
++
++type blkDevice struct {
++	id       string
++	filePath string
++	driver   VirtioDriver
++	deviceID string
++	bus      string
++	addr     string
++	iothread string
++}
++
++var blkDriver = map[VirtioDriver]string{
++	MmioBus: "virtio-blk-device",
++	PciBus:  "virtio-blk-pci",
++}
++
++func (b blkDevice) isVaild() bool {
++	if b.id == "" || b.filePath == "" || b.deviceID == "" {
++		return false
++	}
++	return true
++}
++
++func (b blkDevice) getParams(config *vmConfig) []string {
++	if !b.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var driveParams []Param
++	var devParams []Param
++
++	driveParams = append(driveParams, Param{"id", b.id})
++	driveParams = append(driveParams, Param{"file", b.filePath})
++
++	b.driver = b.driver.getDriver(config)
++	driver := blkDriver[b.driver]
++	devParams = append(devParams, Param{"drive", b.id})
++	devParams = append(devParams, Param{"id", b.deviceID})
++	if b.bus != "" {
++		devParams = append(devParams, Param{"bus", b.bus})
++		devParams = append(devParams, Param{"addr", b.addr})
++	}
++	if b.iothread != "" {
++		devParams = append(devParams, Param{"iothread", b.iothread})
++	}
++
++	params = append(params, "-drive", strings.Join(SerializeParams(driveParams, "="), ","))
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	return params
++}
++
++type netDevice struct {
++	devType  string
++	id       string
++	ifname   string
++	vhost    bool
++	FDs      []*os.File
++	VhostFDs []*os.File
++	driver   VirtioDriver
++	netdev   string
++	deviceID string
++	bus      string
++	addr     string
++	mac      string
++}
++
++var netDriver = map[VirtioDriver]string{
++	MmioBus: "virtio-net-device",
++	PciBus:  "virtio-net-pci",
++}
++
++func (n netDevice) isVaild() bool {
++	if n.id == "" || n.netdev == "" || n.deviceID == "" {
++		return false
++	}
++	return true
++}
++
++func (n netDevice) getParams(config *vmConfig) []string {
++	if !n.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var netdevParams []Param
++	var devParams []Param
++
++	netdevParams = append(netdevParams, Param{"id", n.id})
++	if n.ifname != "" {
++		netdevParams = append(netdevParams, Param{"ifname", n.ifname})
++	}
++	if n.vhost {
++		netdevParams = append(netdevParams, Param{"vhost", "on"})
++	}
++
++	n.driver = n.driver.getDriver(config)
++	driver := netDriver[n.driver]
++	devParams = append(devParams, Param{"netdev", n.id})
++	devParams = append(devParams, Param{"id", n.deviceID})
++	if n.bus != "" {
++		devParams = append(devParams, Param{"bus", n.bus})
++		devParams = append(devParams, Param{"addr", n.addr})
++	}
++	if n.mac != "" {
++		devParams = append(devParams, Param{"mac", n.mac})
++	}
++
++	params = append(params, "-netdev", fmt.Sprintf("%s,%s", n.devType, strings.Join(SerializeParams(netdevParams, "="), ",")))
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	return params
++}
++
++type vhostVsock struct {
++	driver  VirtioDriver
++	id      string
++	guestID string
++	bus     string
++	addr    string
++}
++
++var vsockDriver = map[VirtioDriver]string{
++	MmioBus: "vhost-vsock-device",
++	PciBus:  "vhost-vsock-pci",
++}
++
++func (v vhostVsock) isVaild() bool {
++	if v.id == "" || v.guestID == "" {
++		return false
++	}
++	return true
++}
++
++func (v vhostVsock) getParams(config *vmConfig) []string {
++	if !v.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var devParams []Param
++
++	v.driver = v.driver.getDriver(config)
++	driver := vsockDriver[v.driver]
++	devParams = append(devParams, Param{"id", v.id})
++	devParams = append(devParams, Param{"guest-cid", v.guestID})
++	if v.bus != "" {
++		devParams = append(devParams, Param{"bus", v.bus})
++		devParams = append(devParams, Param{"addr", v.addr})
++	}
++
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	return params
++}
++
++type rngDevice struct {
++	id       string
++	fileName string
++	driver   VirtioDriver
++	deviceID string
++	rng      string
++	bus      string
++	addr     string
++}
++
++var rngDriver = map[VirtioDriver]string{
++	MmioBus: "virtio-rng-device",
++	PciBus:  "virtio-rng-pci",
++}
++
++func (r rngDevice) isVaild() bool {
++	if r.id == "" || r.rng == "" || r.fileName == "" || r.deviceID == "" {
++		return false
++	}
++	return true
++}
++
++func (r rngDevice) getParams(config *vmConfig) []string {
++	if !r.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var objParams []Param
++	var devParams []Param
++
++	objParams = append(objParams, Param{"id", r.id})
++	objParams = append(objParams, Param{"filename", r.fileName})
++
++	r.driver = r.driver.getDriver(config)
++	driver := rngDriver[r.driver]
++	devParams = append(devParams, Param{"rng", r.rng})
++	devParams = append(devParams, Param{"id", r.deviceID})
++	if r.bus != "" {
++		devParams = append(devParams, Param{"bus", r.bus})
++		devParams = append(devParams, Param{"addr", r.addr})
++	}
++
++	params = append(params, "-object", fmt.Sprintf("rng-random,%s", strings.Join(SerializeParams(objParams, "="), ",")))
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	return params
++}
++
++type consoleDevice struct {
++	driver   VirtioDriver
++	id       string
++	bus      string
++	addr     string
++	backend  string
++	charID   string
++	devType  string
++	charDev  string
++	deviceID string
++}
++
++var consoleDriver = map[VirtioDriver]string{
++	MmioBus: "virtio-serial-device",
++	PciBus:  "virtio-serial-pci",
++}
++
++func (c consoleDevice) isVaild() bool {
++	if c.id == "" || c.charDev == "" {
++		return false
++	}
++	return true
++}
++
++func (c consoleDevice) getParams(config *vmConfig) []string {
++	if !c.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var devParams []Param
++	var charParams []Param
++	var conParams []Param
++
++	c.driver = c.driver.getDriver(config)
++	driver := consoleDriver[c.driver]
++	if c.id != "" {
++		devParams = append(devParams, Param{"id", c.id})
++	}
++	if c.bus != "" {
++		devParams = append(devParams, Param{"bus", c.bus})
++		devParams = append(devParams, Param{"addr", c.addr})
++	}
++
++	charParams = append(charParams, Param{"id", c.charID})
++	if config.useOzone {
++		charParams = append(charParams, Param{"path", config.Ozone.consolePath})
++	} else {
++		charParams = append(charParams, Param{"path", config.consolePath})
++	}
++
++	conParams = append(conParams, Param{"chardev", c.charDev})
++	conParams = append(conParams, Param{"id", c.deviceID})
++
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	params = append(params, "-chardev", fmt.Sprintf("%s,%s,server,nowait", c.backend, strings.Join(SerializeParams(charParams, "="), ",")))
++	params = append(params, "-device", fmt.Sprintf("%s,%s", c.devType, strings.Join(SerializeParams(conParams, "="), ",")))
++	return params
++}
++
+ type inComing struct {
+ 	path             string
+ 	bootFromTemplate bool
+@@ -132,7 +411,7 @@ func (c *vmConfig) appendKernel(params *[]string) {
+ 	if c.kernelPath == "" {
+ 		return
+ 	}
+-	
++
+ 	if c.useOzone {
+ 		ozone = c.Ozone
+ 		*params = append(*params, "-kernel", ozone.kernelPath)
+@@ -216,35 +495,26 @@ func (c *vmConfig) appendIncoming(params *[]string) {
+ 	}
+ }
+ 
+-type stratovirtDev struct {
+-	dev     interface{}
+-	devType deviceType
++// State keeps StratoVirt device and pids state.
++type State struct {
++	mmioBlkSlots [mmioBlkCount]bool
++	mmioNetSlots [mmioNetCount]bool
++	pid          int
++	virtiofsPid  int
+ }
+ 
++// stratovirt struct is an Hypervisor interface implementation for the StratoVirt VMM.
+ type stratovirt struct {
+-	id              string
+-	ctx             context.Context
+-	sandbox         *Sandbox
+-	store           persistapi.PersistDriver
+-	config          HypervisorConfig
+-	rootfsPath      string
+-	kernelPath      string
+-	templatePath    string
+-	pid             int
+-	consolePath     string
+-	socketPath      string
+-	netNSPath       string
+-	qmpMonitorCh    qmpChannel
+-	ozoneRoot       string
+-	ozoneRes        []string
+-	useOzone        bool
+-	useImage        bool
+-	pidfile         string
+-	logfile         string
+-	devices         []stratovirtDev
+-	HotpluggedVCPUs []CPUDevice
+-	mmioBlkSlots    [mmioBlkCount]bool
+-	mmioNetSlots    [mmioNetCount]bool
++	id           string
++	path         string
++	ctx          context.Context
++	sandbox      *Sandbox
++	config       HypervisorConfig
++	qmpMonitorCh qmpChannel
++	vmConfig     vmConfig
++	store        persistapi.PersistDriver
++	state        State
++	netNSPath    string
+ }
+ 
+ func (s *stratovirt) Logger() *logrus.Entry {
+@@ -258,102 +528,371 @@ func (s *stratovirt) trace(parent context.Context, name string) (otelTrace.Span,
+ 	}
+ 
+ 	tracer := otel.Tracer("kata")
+-	ctx, span := tracer.Start(parent, name, otelTrace.WithAttributes(otelLabel.String("source", "runtime"), otelLabel.String("package", "virtcontainers"), otelLabel.String("subsystem", "hypervisor"), otelLabel.String("type", "stratovirt"), otelLabel.String("sandbox_id", s.id)))
++	ctx, span := tracer.Start(parent, name)
++	span.SetAttributes([]otelLabel.KeyValue{otelLabel.Key("subsystem").String("hypervisor"), otelLabel.Key("type").String("stratovirt")}...)
+ 
+ 	return span, ctx
+ }
+ 
+-func (s *stratovirt) getKernelCmdLine() string {
++func (s *stratovirt) getKernelParams(machineType string, initrdPath string) (string, error) {
+ 	var params []string
+ 
+-	if s.useImage {
++	if machineType == "microvm" {
++		params = append(params, defaultMicroVMParames)
++	}
++	// Take the default parameters.
++	params = append(params, defaultKernelParames)
++
++	if initrdPath == "" {
+ 		params = append(params, "root=/dev/vda")
+ 	}
+ 
+-	params = append(params, "pci=off")
+-	params = append(params, "reboot=k")
+-	params = append(params, "panic=1")
+-	params = append(params, "iommu=off")
+-	params = append(params, "acpi=off")
+-	params = append(params, "quiet")
+-	params = append(params, "agent.use_vsock=true")
+-	params = append(params, "random.trust_cpu=on")
+-	params = append(params, "rw")
+-	params = append(params, SerializeParams(s.config.KernelParams, "=")...)
++	if s.config.Debug {
++		params = append(params, "debug")
++	} else {
++		params = append(params, "quiet")
++	}
++	// Add extra kernel parameters from configuration file.
++	params = append(params, strings.Join(SerializeParams(s.config.KernelParams, "="), " "))
++
++	return strings.Join(params, " "), nil
++}
++
++func (s *stratovirt) createQMPSocket(vmPath string) govmmQemu.QMPSocket {
++	socketPath := filepath.Join(vmPath, apiSocket)
+ 
+-	return strings.Join(params, " ")
++	s.qmpMonitorCh = qmpChannel{
++		ctx:  s.ctx,
++		path: socketPath,
++	}
++
++	return govmmQemu.QMPSocket{
++		Type:   "unix",
++		Name:   s.qmpMonitorCh.path,
++		Server: true,
++		NoWait: true,
++	}
+ }
+ 
+-func (s *stratovirt) hypervisorConfig() HypervisorConfig {
+-	return s.config
++func (s *stratovirt) createDevices() []VirtioDev {
++	var devices []VirtioDev
++	ctx := s.ctx
++
++	// Set random device.
++	devices = s.appendRng(ctx, devices)
++	// Set serial console device.
++	devices = s.appendConsole(ctx, devices)
++
++	if s.vmConfig.initrdPath == "" {
++		devices = s.appendBlock(ctx, devices)
++		if s.vmConfig.machineType == MachineTypeMicrovm {
++			s.state.mmioBlkSlots[0] = true
++		}
++	}
++
++	return devices
+ }
+ 
+-func (s *stratovirt) createSandbox(ctx context.Context, id string, networkNS NetworkNamespace, hypervisorConfig *HypervisorConfig) error {
+-	s.ctx = ctx
++func (s *stratovirt) appendBlock(ctx context.Context, devices []VirtioDev) []VirtioDev {
++	var bus string
++	var addr uint32
++	var err error
++	var iothread string
+ 
+-	var span otelTrace.Span
+-	span, _ = s.trace(ctx, "createSandbox")
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, "rootfs")
++		if err != nil {
++			return devices
++		}
++	}
++
++	if s.vmConfig.IOThread {
++		iothread = iothreadID
++	}
++
++	devices = append(devices, blkDevice{
++		id:       "rootfs",
++		filePath: s.vmConfig.rootfsPath,
++		deviceID: "virtio-blk0",
++		bus:      bus,
++		addr:     fmt.Sprintf("%d", addr),
++		iothread: iothread,
++	})
++
++	return devices
++}
++
++func (s *stratovirt) appendRng(ctx context.Context, devices []VirtioDev) []VirtioDev {
++	var bus string
++	var addr uint32
++	var err error
++
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, "objrng0")
++		if err != nil {
++			return devices
++		}
++	}
++
++	devices = append(devices, rngDevice{
++		id:       "objrng0",
++		fileName: s.config.EntropySource,
++		rng:      "objrng0",
++		deviceID: "virtio-rng0",
++		bus:      bus,
++		addr:     fmt.Sprintf("%d", addr),
++	})
++
++	return devices
++}
++
++func (s *stratovirt) appendConsole(ctx context.Context, devices []VirtioDev) []VirtioDev {
++	var bus string
++	var addr uint32
++	var err error
++
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, "virtio-serial0")
++		if err != nil {
++			return devices
++		}
++	}
++
++	devices = append(devices, consoleDevice{
++		id:       "virtio-serial0",
++		backend:  "socket",
++		charID:   "charconsole0",
++		devType:  "virtconsole",
++		charDev:  "charconsole0",
++		deviceID: "virtio-console0",
++		bus:      bus,
++		addr:     fmt.Sprintf("%d", addr),
++	})
++
++	return devices
++}
++
++func (s *stratovirt) appendVhostVsock(ctx context.Context, devices []VirtioDev, vsock types.VSock) []VirtioDev {
++	var bus string
++	var addr uint32
++	var err error
++
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, "vsock-id")
++		if err != nil {
++			return devices
++		}
++	}
++
++	devices = append(devices, vhostVsock{
++		id:      "vsock-id",
++		guestID: fmt.Sprintf("%d", vsock.ContextID),
++		bus:     bus,
++		addr:    fmt.Sprintf("%d", addr),
++	})
++
++	return devices
++}
++
++func (s *stratovirt) appendNetwork(ctx context.Context, devices []VirtioDev, endpoint Endpoint) []VirtioDev {
++	var bus string
++	var addr uint32
++	var err error
++
++	name := endpoint.Name()
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, name)
++		if err != nil {
++			return devices
++		}
++	}
++
++	devices = append(devices, netDevice{
++		devType:  "tap",
++		id:       name,
++		ifname:   endpoint.NetworkPair().TapInterface.TAPIface.Name,
++		vhost:    false,
++		FDs:      nil,
++		VhostFDs: nil,
++		netdev:   name,
++		deviceID: name,
++		bus:      bus,
++		mac:      endpoint.HardwareAddr(),
++		addr:     fmt.Sprintf("%d", addr),
++	})
++
++	return devices
++}
++
++func (s *stratovirt) setVMConfig(id string, hypervisorConfig *HypervisorConfig) error {
++	span, _ := s.trace(s.ctx, "setStratoVirtUp")
+ 	defer span.End()
+ 
++	if err := hypervisorConfig.valid(); err != nil {
++		return err
++	}
++
+ 	s.id = id
+ 	s.config = *hypervisorConfig
+-	if (s.config.OzonePath == "") || s.config.BootToBeTemplate {
+-		s.useOzone = false
+-		s.pidfile = filepath.Join(s.store.RunVMStoragePath(), s.id, "pid")
+-		s.logfile = filepath.Join(s.store.RunVMStoragePath(), s.id, "/stratovirt.log")
+-		s.socketPath = filepath.Join(s.store.RunVMStoragePath(), id, apiSocket)
+-		s.consolePath = filepath.Join(s.store.RunVMStoragePath(), id, debugSocket)
+-	} else {
+-		s.useOzone = true
+-		s.ozoneRoot = filepath.Join(ozoneBaseDir, s.id)
+-		s.pidfile = filepath.Join(s.ozoneRoot, "pid")
+-		s.logfile = filepath.Join(s.ozoneRoot, "stratovirt.log")
+-		s.socketPath = filepath.Join(s.ozoneRoot, apiSocket)
+-		s.consolePath = filepath.Join(s.ozoneRoot, debugSocket)
++
++	machineType := strings.ToLower(s.config.HypervisorMachineType)
++	if machineType == "" {
++		machineType = defaultStratoVirtMachineType
++	}
++
++	initrdPath, err := s.config.InitrdAssetPath()
++	if err != nil {
++		return err
++	}
++
++	imagePath, err := s.config.ImageAssetPath()
++	if err != nil {
++		return err
++	}
++
++	KernelPath, err := s.config.KernelAssetPath()
++	if err != nil {
++		return err
++	}
++
++	params, err := s.getKernelParams(machineType, initrdPath)
++	if err != nil {
++		return err
++	}
++
++	var PFlash []string
++
++	vmPath := filepath.Join(s.store.RunVMStoragePath(), s.id)
++	qmpSocket := s.createQMPSocket(vmPath)
++
++	s.vmConfig = vmConfig{
++		name:          fmt.Sprintf("sandbox-%s", id),
++		uuid:          uuid.Generate().String(),
++		machineType:   machineType,
++		vmPath:        vmPath,
++		smp:           uint32(s.config.NumVCPUs),
++		memory:        uint64(s.config.MemorySize),
++		kernelPath:    KernelPath,
++		params:        params,
++		rootfsPath:    imagePath,
++		initrdPath:    initrdPath,
++		rootBus:       types.NewBridge(types.PCIE, "pcie.0", make(map[uint32]string), 0),
++		IOThread:      s.config.EnableIOThreads,
++		PFlash:        PFlash,
++		pidFile:       filepath.Join(vmPath, "pid"),
++		qmpSocketPath: qmpSocket,
++		consolePath:   filepath.Join(vmPath, debugSocket),
++		fsSockPath:    filepath.Join(vmPath, virtiofsSocket),
++		daemonize:     true,
++	}
++
++	s.vmConfig.devices = s.createDevices()
++
++	// Set incoming parameters if VM starts from template mode.
++	if s.config.BootFromTemplate || s.config.BootToBeTemplate {
++		s.vmConfig.incoming = inComing{
++			path:             strings.Replace(s.config.DevicesStatePath, "/state", "", -1),
++			bootFromTemplate: s.config.BootFromTemplate,
++		}
++	}
++
++	if hypervisorConfig.Debug {
++		s.vmConfig.logFile = filepath.Join(vmPath, "stratovirt.log")
++	}
++	return nil
++}
++
++// When running with ozone environment, all resources need to be under a
++// specific path (e.g. /srv/ozone/stratovirt/).
++func (s *stratovirt) setOzone() error {
++	if s.config.OzonePath == "" || s.vmConfig.machineType != MachineTypeMicrovm {
++		s.vmConfig.useOzone = false
++		return nil
+ 	}
+ 
+-	if s.config.VMid != "" && s.useOzone {
+-		// Make sure the symlinks do not exist
+-		os.RemoveAll(s.ozoneRoot)
++	ozoneRoot := filepath.Join(ozoneBaseDir, s.id)
++	s.vmConfig.useOzone = true
++	s.vmConfig.consolePath = filepath.Join(ozoneRoot, debugSocket)
++	s.vmConfig.logFile = filepath.Join(ozoneRoot, "stratovirt.log")
++	s.vmConfig.pidFile = filepath.Join(ozoneRoot, "pid")
++	s.vmConfig.qmpSocketPath.Name = filepath.Join(ozoneRoot, apiSocket)
++	s.qmpMonitorCh.path = filepath.Join(ozoneRoot, apiSocket)
++
++	if s.config.VMid != "" {
++		os.RemoveAll(ozoneRoot)
+ 		ozoneVmRoot := filepath.Join(ozoneBaseDir, s.config.VMid)
+-		if err := os.Symlink(ozoneVmRoot, s.ozoneRoot); err != nil {
++		if err := os.Symlink(ozoneVmRoot, ozoneRoot); err != nil {
+ 			return err
+ 		}
+ 	}
+ 
+-	if s.config.BootFromTemplate || s.config.BootToBeTemplate {
+-		s.templatePath = strings.Replace(s.config.DevicesStatePath, "/state", "", -1)
++	var ozoneRes []string
++	ozoneRes = append(ozoneRes, s.vmConfig.kernelPath)
++	if s.vmConfig.initrdPath != "" {
++		ozoneRes = append(ozoneRes, s.vmConfig.initrdPath)
++	} else {
++		ozoneRes = append(ozoneRes, s.vmConfig.rootfsPath)
+ 	}
+ 
+-	s.netNSPath = networkNS.NetNsPath
+-	s.qmpMonitorCh = qmpChannel{
+-		ctx:  s.ctx,
+-		path: s.socketPath,
++	s.vmConfig.Ozone = Ozone{
++		ozoneRoot:     ozoneRoot,
++		ozoneRes:      ozoneRes,
++		consolePath:   filepath.Base(s.vmConfig.consolePath),
++		kernelPath:    filepath.Base(s.vmConfig.kernelPath),
++		initrdPath:    filepath.Base(s.vmConfig.initrdPath),
++		pidFile:       filepath.Base(s.vmConfig.pidFile),
++		logFile:       filepath.Base(s.vmConfig.logFile),
++		qmpSocketPath: filepath.Base(s.vmConfig.qmpSocketPath.Name),
+ 	}
++	return nil
++}
++
++func (s *stratovirt) hypervisorConfig() HypervisorConfig {
++	return s.config
++}
+ 
+-	if kernelPath, err := s.config.KernelAssetPath(); err == nil {
+-		s.kernelPath = kernelPath
+-		s.ozoneRes = append(s.ozoneRes, s.kernelPath)
++// Get StratoVirt binary path.
++func (s *stratovirt) binPath() (string, error) {
++	path, err := s.config.HypervisorAssetPath()
++	if err != nil {
++		return "", err
+ 	}
+ 
+-	initrdPath, err := s.config.InitrdAssetPath()
++	if path == "" {
++		path = defaultStratoVirt
++	}
++
++	if _, err = os.Stat(path); os.IsNotExist(err) {
++		return "", fmt.Errorf("StratoVirt path (%s) does not exist", path)
++	}
++	return path, nil
++}
++
++func (s *stratovirt) createSandbox(ctx context.Context, id string, networkNS NetworkNamespace, hypervisorConfig *HypervisorConfig) error {
++	var span otelTrace.Span
++	span, _ = s.trace(ctx, "createSandbox")
++	defer span.End()
++
++	s.ctx = ctx
++	err := s.setVMConfig(id, hypervisorConfig)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	if initrdPath == "" {
+-		imagePath, err := s.config.ImageAssetPath()
+-		if err != nil {
+-			return err
+-		}
+-		s.useImage = true
+-		s.rootfsPath = imagePath
+-	} else {
+-		s.useImage = false
+-		s.rootfsPath = initrdPath
++	if err := s.setOzone(); err != nil {
++		return err
++	}
++
++	if s.path, err = s.binPath(); err != nil {
++		return err
+ 	}
+-	s.ozoneRes = append(s.ozoneRes, s.rootfsPath)
+ 
++	s.netNSPath = networkNS.NetNsPath
+ 	return nil
+ }
+ 
+@@ -366,7 +905,7 @@ func (s *stratovirt) waitSandBoxStarted(timeout int) error {
+ 		}
+ 
+ 		if int(time.Since(timeStart).Seconds()) > timeout {
+-			return fmt.Errorf("Failed to connect to StratoVirt instance (timeout %ds): %v", timeout, err)
++			return fmt.Errorf("failed to connect to stratovirt instance (timeout %ds): %v", timeout, err)
+ 		}
+ 
+ 		time.Sleep(time.Duration(50) * time.Millisecond)
+@@ -376,205 +915,114 @@ func (s *stratovirt) waitSandBoxStarted(timeout int) error {
+ 		s.Logger().WithError(err).Error(qmpCapErrMsg)
+ 		return err
+ 	}
+-
+ 	return nil
+ }
+ 
+-func (s *stratovirt) createbaseParams() []string {
+-	var params []string
+-
+-	params = append(params, "-name", fmt.Sprintf("sandbox-%s", s.id))
+-	params = append(params, "-append", s.getKernelCmdLine())
+-	params = append(params, "-smp", fmt.Sprintf("%d", s.config.NumVCPUs))
+-	params = append(params, "-m", fmt.Sprintf("%d", uint64(s.config.MemorySize)))
+-	params = append(params, "-device", "virtio-serial-device")
+-	params = append(params, "-device", "virtconsole,chardev=charconsole0,id=virtioconsole0")
+-	params = append(params, "-object", fmt.Sprintf("rng-random,id=objrng0,filename=%s", s.config.EntropySource))
+-	params = append(params, "-device", "virtio-rng-device,rng=objrng0")
+-
+-	// daemonize
+-	params = append(params, "-daemonize")
+-
+-	return params
++func (s *stratovirt) createBaseParams(config vmConfig, params *[]string) {
++	config.appendName(params)
++	config.appendUUID(params)
++	config.appendMachine(params)
++	config.appendCPU(params)
++	config.appendMemory(params)
++	config.appendKernel(params)
++	config.appendPFlash(params)
++	config.appendQMPSocket(params)
++	config.appendPidFile(params)
++	config.appendLogFile(params)
++	config.appendIOThreads(params)
++	config.appendDevices(params)
++	config.appendIncoming(params)
++
++	if config.daemonize {
++		*params = append(*params, "-daemonize")
++	}
++	*params = append(*params, "-disable-seccomp")
+ }
+ 
+-func (s *stratovirt) createOzoneParams(params []string) ([]string, error) {
+-	params = append(params, "-qmp", fmt.Sprintf("unix:%s,server,nowait", apiSocket))
+-	params = append(params, "-chardev", fmt.Sprintf("socket,id=charconsole0,path=%s,server,nowait", debugSocket))
+-	params = append(params, "-kernel", filepath.Base(s.kernelPath))
+-	params = append(params, "-pidfile", filepath.Base(s.pidfile))
+-
+-	// append logfile only on debug
+-	if s.config.Debug {
+-		params = append(params, "-D", filepath.Base(s.logfile))
+-	}
++func (s *stratovirt) createOzoneParams(params []string, config vmConfig) ([]string, error) {
++	var err error
+ 
+-	if s.useImage {
+-		s.mmioBlkSlots[0] = true
+-		params = append(params, "-device", "virtio-blk-device,drive=rootfs")
+-		params = append(params, "-drive", fmt.Sprintf("id=rootfs,file=%s,direct=off", filepath.Base(s.rootfsPath)))
+-	} else {
+-		params = append(params, "-initrd", filepath.Base(s.rootfsPath))
+-	}
+-
+-	// handle boot from template
+-	if s.config.BootFromTemplate {
+-		s.ozoneRes = append(s.ozoneRes, s.templatePath)
+-		params = append(params, "-incoming", fmt.Sprintf("file:%s", filepath.Base(s.templatePath)))
+-	}
+-
+-	// add devices to cmdline
+-	for _, d := range s.devices {
+-		switch v := d.dev.(type) {
+-		case Endpoint:
+-			name := v.Name()
+-			mac := v.HardwareAddr()
+-			tapName := v.NetworkPair().TapInterface.TAPIface.Name
+-			params = append(params, "-device", fmt.Sprintf("virtio-net-device,netdev=%s,id=%s,mac=%s", name, name, mac))
+-			params = append(params, "-netdev", fmt.Sprintf("tap,id=%s,ifname=%s", name, tapName))
+-		case config.BlockDrive:
+-			id := v.ID
+-			path := v.File
+-			s.ozoneRes = append(s.ozoneRes, path)
+-			params = append(params, "-device", fmt.Sprintf("virtio-blk-device,drive=%s", id))
+-			params = append(params, "-drive", fmt.Sprintf("id=%s,file=%s", id, filepath.Base(path)))
+-		case types.VSock:
+-			v.VhostFd.Close()
+-			params = append(params, "-device", fmt.Sprintf("vhost-vsock-device,id=vsock-id,guest-cid=%d", v.ContextID))
+-		default:
+-			s.Logger().Error("Adding device type is unsupported")
+-		}
++	ozoneParams := []string{
++		"-exec-file", s.path,
++		"-name", s.id,
++		"-gid", "0",
++		"-uid", "0",
+ 	}
+ 
+-	return params, nil
+-}
+-
+-func (s *stratovirt) createParams(params []string) ([]string, error) {
+-	params = append(params, "-qmp", fmt.Sprintf("unix:%s,server,nowait", s.socketPath))
+-	params = append(params, "-chardev", fmt.Sprintf("socket,id=charconsole0,path=%s,server,nowait", s.consolePath))
+-	params = append(params, "-kernel", s.kernelPath)
+-	params = append(params, "-pidfile", s.pidfile)
+-
+-	// append logfile only on debug
+-	if s.config.Debug {
+-		params = append(params, "-D", s.logfile)
++	if s.netNSPath != "" {
++		ozoneParams = append(ozoneParams, "-netns", s.netNSPath)
+ 	}
+-
+-	if s.useImage {
+-		s.mmioBlkSlots[0] = true
+-		params = append(params, "-device", "virtio-blk-device,drive=rootfs")
+-		params = append(params, "-drive", fmt.Sprintf("id=rootfs,file=%s,direct=off", s.rootfsPath))
+-	} else {
+-		params = append(params, "-initrd", s.rootfsPath)
+-	}
+-
+-	// handle boot from template
+-	if s.config.BootFromTemplate {
+-		params = append(params, "-incoming", fmt.Sprintf("file:%s", s.templatePath))
+-	}
+-
+-	// add devices to cmdline
+-	for _, d := range s.devices {
+-		switch v := d.dev.(type) {
+-		case Endpoint:
+-			name := v.Name()
+-			mac := v.HardwareAddr()
+-			tapName := v.NetworkPair().TapInterface.TAPIface.Name
+-			params = append(params, "-device", fmt.Sprintf("virtio-net-device,netdev=%s,id=%s,mac=%s", name, name, mac))
+-			params = append(params, "-netdev", fmt.Sprintf("tap,id=%s,ifname=%s", name, tapName))
+-		case config.BlockDrive:
+-			id := v.ID
+-			path := v.File
+-			params = append(params, "-device", fmt.Sprintf("virtio-blk-device,drive=%s", id))
+-			params = append(params, "-drive", fmt.Sprintf("id=%s,file=%s", id, path))
+-		case types.VSock:
+-			v.VhostFd.Close()
+-			params = append(params, "-device", fmt.Sprintf("vhost-vsock-device,id=vsock-id,guest-cid=%d", v.ContextID))
+-		default:
+-			s.Logger().Error("Adding device type is unsupported")
++	ozoneParams = append(ozoneParams, "-source")
++	ozoneParams = append(ozoneParams, s.vmConfig.Ozone.ozoneRes...)
++	defer func() {
++		if err != nil {
++			ozoneParams = append(ozoneParams, "-clean-resource")
++			cmd := exec.CommandContext(s.ctx, s.config.OzonePath, ozoneParams...)
++			if errRun := cmd.Run(); errRun != nil {
++				s.Logger().WithError(errRun).Error("Failed to clean up ozone dir %s", s.vmConfig.Ozone.ozoneRoot)
++			}
+ 		}
+-	}
+-
+-	return params, nil
++	}()
++	ozoneParams = append(ozoneParams, "--")
++	ozoneParams = append(ozoneParams, params...)
++	return ozoneParams, nil
+ }
+ 
+ func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
+ 	span, _ := s.trace(ctx, "startSandbox")
+ 	defer span.End()
+ 
+-	var err error
+-	var cmd *exec.Cmd
+-
+-	params := s.createbaseParams()
+-
+-	stratovirtBinPath, err := s.config.HypervisorAssetPath()
++	err := os.MkdirAll(s.vmConfig.vmPath, DirMode)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	if s.useOzone {
+-		var ozoneParams []string
+-		extend_params, err := s.createOzoneParams(params)
++	defer func() {
+ 		if err != nil {
+-			return err
+-		}
+-		ozoneParams = append(ozoneParams, "-exec-file", stratovirtBinPath)
+-		ozoneParams = append(ozoneParams, "-name", s.id)
+-		ozoneParams = append(ozoneParams, "-gid", "0")
+-		ozoneParams = append(ozoneParams, "-uid", "0")
+-		if s.netNSPath != "" {
+-			ozoneParams = append(ozoneParams, "-netns", s.netNSPath)
+-		}
+-
+-		ozoneParams = append(ozoneParams, "-source")
+-		ozoneParams = append(ozoneParams, s.ozoneRes...)
++			if s.state.virtiofsPid != 0 {
++				syscall.Kill(s.state.virtiofsPid, syscall.SIGILL)
++			}
+ 
+-		defer func() {
+-			if err != nil {
+-				ozoneParams = append(ozoneParams, "-clean-resource")
+-				cmd = exec.CommandContext(s.ctx, s.config.OzonePath, ozoneParams...)
+-				if err := cmd.Run(); err != nil {
+-					s.Logger().WithError(err).Error("Failed to clean up ozone dir %s", s.ozoneRoot)
+-				}
++			link, errLink := filepath.EvalSymlinks(s.vmConfig.vmPath)
++			if errLink != nil {
++				s.Logger().WithError(errLink).Warnf("Failed to get evaluation of any symbolic links.")
+ 			}
+-		}()
+ 
+-		ozoneParams = append(ozoneParams, "--")
+-		ozoneParams = append(ozoneParams, extend_params...)
+-		cmd = exec.CommandContext(s.ctx, s.config.OzonePath, ozoneParams...)
+-		s.Logger().Info("StratoVirt/Ozone start with params: ", cmd)
+-	} else {
+-		params, err = s.createParams(params)
+-		if err != nil {
+-			return err
+-		}
++			if errRemove := os.RemoveAll(s.vmConfig.vmPath); errRemove != nil {
++				s.Logger().WithError(errRemove).Warnf("Failed to clean up vm dir %s", s.vmConfig.vmPath)
++			}
+ 
+-		dir := filepath.Join(s.store.RunVMStoragePath(), s.id)
+-		err = os.MkdirAll(dir, DirMode)
+-		if err != nil {
+-			return err
+-		}
+-		defer func() {
+-			if err != nil {
+-				if err := os.RemoveAll(dir); err != nil {
+-					s.Logger().WithError(err).Error("Fail to clean up vm dir %s", dir)
++			if link != s.vmConfig.vmPath && link != "" {
++				if errRemove := os.RemoveAll(link); errRemove != nil {
++					s.Logger().WithError(errRemove).WithField("link", link).Warn("Failed to remove vm path link %s", link)
+ 				}
+ 			}
+-		}()
++		}
++	}()
+ 
+-		cmd = exec.CommandContext(s.ctx, stratovirtBinPath, params...)
+-		s.Logger().Info("StratoVirt start with params: ", cmd)
++	var params []string
++	s.createBaseParams(s.vmConfig, &params)
++
++	var cmd *exec.Cmd
++	if s.vmConfig.useOzone {
++		var ozoneParams []string
++		if ozoneParams, err = s.createOzoneParams(params, s.vmConfig); err != nil {
++			return nil
++		}
++		cmd = exec.Command(s.config.OzonePath, ozoneParams...)
++	} else {
++		cmd = exec.Command(s.path, params...)
+ 	}
++	s.Logger().Info("StratoVirt start with cmd: ", cmd)
+ 
+-	if err := cmd.Start(); err != nil {
++	if err = cmd.Run(); err != nil {
+ 		s.Logger().WithField("Error starting hypervisor, please check the params", err).Error()
+-		return err
++		return fmt.Errorf("failed to lunch stratovirt: %q", err)
+ 	}
+ 
+ 	if err = s.waitSandBoxStarted(timeout); err != nil {
+ 		return err
+ 	}
+-
+ 	return nil
+ }
+ 
+@@ -583,34 +1031,41 @@ func (s *stratovirt) stopSandbox(ctx context.Context, force bool) error {
+ 	defer span.End()
+ 
+ 	defer func() {
+-		dir := filepath.Join(s.store.RunVMStoragePath(), s.id)
+-		link, _ := filepath.EvalSymlinks(dir)
++		link, errLink := filepath.EvalSymlinks(s.vmConfig.vmPath)
++		if errLink != nil {
++			s.Logger().WithError(errLink).Warnf("Failed to get evaluation of any symbolic links.")
++		}
+ 
+-		if err := os.RemoveAll(dir); err != nil {
+-			s.Logger().WithError(err).Warnf("Failed to clean up vm dir %s", dir)
++		if errRemove := os.RemoveAll(s.vmConfig.vmPath); errRemove != nil {
++			s.Logger().WithError(errRemove).Warnf("Failed to clean up vm dir %s", s.vmConfig.vmPath)
+ 		}
+ 
+-		if link != dir && link != "" {
+-			if err := os.RemoveAll(link); err != nil {
+-				s.Logger().WithError(err).WithField("link", link).Warn("Failed to remove vm path link %s", link)
++		if link != s.vmConfig.vmPath && link != "" {
++			if errRemove := os.RemoveAll(link); errRemove != nil {
++				s.Logger().WithError(errRemove).WithField("link", link).Warn("Failed to remove vm path link %s", link)
+ 			}
+ 		}
+ 	}()
+ 
+ 	if !force {
+-		err := s.qmpSetup()
+-		if err != nil {
+-			return err
++		if errQmp := s.qmpSetup(); errQmp != nil {
++			return errQmp
+ 		}
+ 
+-		err = s.qmpMonitorCh.qmp.ExecuteQuit(s.qmpMonitorCh.ctx)
+-		if err != nil {
+-			s.Logger().WithError(err).Error("Fail to execute qmp: QUIT")
+-			return err
++		errQuit := s.qmpMonitorCh.qmp.ExecuteQuit(s.qmpMonitorCh.ctx)
++		if errQuit != nil {
++			s.Logger().WithError(errQuit).Error("Fail to execute qmp: QUIT")
++			return errQuit
++		}
++
++		if s.state.virtiofsPid != 0 {
++			syscall.Kill(s.state.virtiofsPid, syscall.SIGILL)
+ 		}
+ 	} else {
+-		if s.pid > 0 {
+-			syscall.Kill(s.pid, syscall.SIGKILL)
++		for _, p := range s.getPids() {
++			if p > 0 {
++				syscall.Kill(p, syscall.SIGKILL)
++			}
+ 		}
+ 	}
+ 	return nil
+@@ -624,8 +1079,6 @@ func (s *stratovirt) pauseSandbox(ctx context.Context) error {
+ }
+ 
+ func (s *stratovirt) saveSandbox() error {
+-	s.Logger().Info("save sandbox")
+-
+ 	err := s.qmpSetup()
+ 	if err != nil {
+ 		return err
+@@ -634,13 +1087,12 @@ func (s *stratovirt) saveSandbox() error {
+ 	// BootToBeTemplate sets the VM to be a template that other VMs can can clone from.
+ 	// We would want to bypass shared memory when saving VM to local file through migrate.
+ 	if s.config.BootToBeTemplate {
+-		err = s.qmpMonitorCh.qmp.ExecSetMigrateArguments(s.qmpMonitorCh.ctx, fmt.Sprintf("file:%s", s.templatePath))
++		err = s.qmpMonitorCh.qmp.ExecSetMigrateArguments(s.qmpMonitorCh.ctx, fmt.Sprintf("file:%s", s.vmConfig.incoming.path))
+ 		if err != nil {
+ 			s.Logger().WithError(err).Error("exec migration")
+ 			return err
+ 		}
+ 	}
+-
+ 	return nil
+ }
+ 
+@@ -665,7 +1117,6 @@ func (s *stratovirt) togglePauseSandbox(ctx context.Context, pause bool) error {
+ 	} else {
+ 		s.qmpMonitorCh.qmp.ExecuteCont(s.qmpMonitorCh.ctx)
+ 	}
+-
+ 	return nil
+ }
+ 
+@@ -673,12 +1124,19 @@ func (s *stratovirt) addDevice(ctx context.Context, devInfo interface{}, devType
+ 	span, _ := s.trace(ctx, "addDevice")
+ 	defer span.End()
+ 
+-	dev := stratovirtDev{
+-		dev:     devInfo,
+-		devType: devType,
++	switch v := devInfo.(type) {
++	case types.Socket:
++		s.vmConfig.devices = s.appendConsole(ctx, s.vmConfig.devices)
++	case types.VSock:
++		v.VhostFd.Close()
++		s.vmConfig.devices = s.appendVhostVsock(ctx, s.vmConfig.devices, v)
++	case Endpoint:
++		s.vmConfig.devices = s.appendNetwork(ctx, s.vmConfig.devices, v)
++	case config.BlockDrive:
++		s.vmConfig.devices = s.appendBlock(ctx, s.vmConfig.devices)
++	default:
++		s.Logger().WithField("dev-type", v).Warn("Could not append device: unsupported device type")
+ 	}
+-	s.devices = append(s.devices, dev)
+-
+ 	return nil
+ }
+ 
+@@ -696,10 +1154,10 @@ func (s *stratovirt) getDevSlot(Name string, isPut bool) (slot int, err error) {
+ 			return 0, fmt.Errorf("Could not convert to int from Str %q", idxStr)
+ 		}
+ 
+-		if !isPut && s.mmioNetSlots[idx] {
++		if !isPut && s.state.mmioNetSlots[idx] {
+ 			return 0, fmt.Errorf("GetDevSlot failed, slot is being used %q", idxStr)
+ 		}
+-		s.mmioNetSlots[idx] = !isPut
++		s.state.mmioNetSlots[idx] = !isPut
+ 
+ 		return idx, nil
+ 	} else if strings.HasPrefix(Name, "vd") {
+@@ -711,10 +1169,10 @@ func (s *stratovirt) getDevSlot(Name string, isPut bool) (slot int, err error) {
+ 		char := []rune(charStr)
+ 		idx := int(char[0] - 'a')
+ 
+-		if !isPut && s.mmioBlkSlots[idx] {
++		if !isPut && s.state.mmioBlkSlots[idx] {
+ 			return 0, fmt.Errorf("GetDevSlot failed, slot is being used %q", charStr)
+ 		}
+-		s.mmioBlkSlots[idx] = !isPut
++		s.state.mmioBlkSlots[idx] = !isPut
+ 
+ 		return idx, nil
+ 	}
+@@ -806,8 +1264,11 @@ func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err err
+ 	switch op {
+ 	case addDevice:
+ 		driver := "virtio-blk-mmio"
+-		if s.useOzone {
++		if s.vmConfig.useOzone {
+ 			filePath, err = s.updateOzoneRes(drive.File, true)
++			if err != nil {
++				return fmt.Errorf("Failed to update ozone resources")
++			}
+ 		} else {
+ 			filePath = drive.File
+ 		}
+@@ -826,7 +1287,7 @@ func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err err
+ 			return err
+ 		}
+ 	case removeDevice:
+-		if s.useOzone {
++		if s.vmConfig.useOzone {
+ 			s.updateOzoneRes(drive.File, false)
+ 		}
+ 		if err := s.qmpMonitorCh.qmp.ExecuteDeviceDel(s.qmpMonitorCh.ctx, drive.ID); err != nil {
+@@ -872,30 +1333,28 @@ func (s *stratovirt) hotplugRemoveDevice(ctx context.Context, devInfo interface{
+ 	}
+ }
+ 
+-func (s *stratovirt) resizeMemory(ctx context.Context, reqMemMB uint32, memoryBlockSizeMB uint32, probe bool) (uint32, memoryDevice, error) {
++func (s *stratovirt) resizeMemory(ctx context.Context, memMB uint32, memoryBlockSizeMB uint32, probe bool) (uint32, memoryDevice, error) {
+ 	return 0, memoryDevice{}, nil
+ }
+ 
+-func (s *stratovirt) resizeVCPUs(ctx context.Context, reqVCPUs uint32) (currentVCPUs uint32, newVCPUs uint32, err error) {
++func (s *stratovirt) resizeVCPUs(ctx context.Context, vcpus uint32) (uint32, uint32, error) {
+ 	return 0, 0, nil
+ }
+ 
+-func (s *stratovirt) getSandboxConsole(ctx context.Context, id string) (string, string, error) {
++func (s *stratovirt) getSandboxConsole(ctx context.Context, sandboxID string) (string, string, error) {
+ 	span, _ := s.trace(ctx, "getSandboxConsole")
+ 	defer span.End()
+ 
+ 	var consolePath string
+ 	if s.config.Debug {
+-		consolePath = s.consolePath
+-	} else {
+-		consolePath = ""
++		consolePath = s.vmConfig.consolePath
+ 	}
+ 	consoleURL, err := utils.BuildSocketPath(consolePath)
+ 	if err != nil {
+ 		return consoleProtoUnix, "", err
+ 	}
+-	return consoleProtoUnix, consoleURL, nil
+ 
++	return consoleProtoUnix, consoleURL, nil
+ }
+ 
+ func (s *stratovirt) disconnect(ctx context.Context) {
+@@ -925,10 +1384,14 @@ func (s *stratovirt) qmpTeardown() {
+ }
+ 
+ func (s *stratovirt) qmpSetup() error {
+-	s.qmpTeardown()
++	s.qmpMonitorCh.Lock()
++	defer s.qmpMonitorCh.Unlock()
+ 
+-	cfg := govmmQemu.QMPConfig{Logger: newQMPLogger()}
++	if s.qmpMonitorCh.qmp != nil {
++		return nil
++	}
+ 
++	cfg := govmmQemu.QMPConfig{Logger: newQMPLogger()}
+ 	// Auto-closed by QMPStart().
+ 	disconnectCh := make(chan struct{})
+ 
+@@ -938,6 +1401,12 @@ func (s *stratovirt) qmpSetup() error {
+ 		return err
+ 	}
+ 
++	if err := qmp.ExecuteQMPCapabilities(s.qmpMonitorCh.ctx); err != nil {
++		s.qmpMonitorCh.qmp.Shutdown()
++		s.Logger().WithError(err).Error(qmpCapErrMsg)
++		return err
++	}
++
+ 	s.qmpMonitorCh.qmp = qmp
+ 	s.qmpMonitorCh.disconn = disconnectCh
+ 
+@@ -969,27 +1438,33 @@ func (s *stratovirt) getThreadIDs(ctx context.Context) (vcpuThreadIDs, error) {
+ }
+ 
+ func (s *stratovirt) updateOzoneRes(src string, add bool) (string, error) {
+-	dst := filepath.Join(s.ozoneRoot, filepath.Base(src))
++	dst := filepath.Join(s.vmConfig.Ozone.ozoneRoot, filepath.Base(src))
+ 	if add {
+ 		if err := bindMount(context.Background(), src, dst, false, "slave"); err != nil {
+ 			s.Logger().WithField("bindMount failed", err).Error()
+ 			return "", err
+ 		}
+ 	} else {
+-		syscall.Unmount(dst, syscall.MNT_DETACH)
++		if err := syscall.Unmount(dst, syscall.MNT_DETACH); err != nil {
++			s.Logger().WithField("Unmount failed", err).Error()
++			return "", err
++		}
+ 	}
+ 	return filepath.Base(src), nil
+ }
+ 
+ func (s *stratovirt) cleanOzoneRes() {
+ 	// Umount all resource in ozoneRoot
+-	if dir, err := ioutil.ReadDir(s.ozoneRoot); err == nil {
++	ozone := s.vmConfig.Ozone
++	if dir, err := ioutil.ReadDir(ozone.ozoneRoot); err == nil {
+ 		for _, file := range dir {
+-			syscall.Unmount(filepath.Join(s.ozoneRoot, file.Name()), syscall.MNT_DETACH)
++			if err := syscall.Unmount(filepath.Join(ozone.ozoneRoot, file.Name()), syscall.MNT_DETACH); err != nil {
++				s.Logger().WithField("Unmount failed", err).Error()
++			}
+ 		}
+ 	}
+ 
+-	if err := os.RemoveAll(s.ozoneRoot); err != nil {
++	if err := os.RemoveAll(ozone.ozoneRoot); err != nil {
+ 		s.Logger().WithField("cleanup Ozone failed", err).Error()
+ 	}
+ 
+@@ -1007,7 +1482,8 @@ func (s *stratovirt) cleanup(ctx context.Context) error {
+ 	defer span.End()
+ 
+ 	s.qmpTeardown()
+-	if s.useOzone {
++
++	if s.vmConfig.useOzone {
+ 		s.cleanOzoneRes()
+ 	}
+ 
+@@ -1016,10 +1492,8 @@ func (s *stratovirt) cleanup(ctx context.Context) error {
+ 
+ func (s *stratovirt) getPids() []int {
+ 	var pids []int
+-	if s.pid != 0 {
+-		pids = append(pids, s.pid)
+-	} else {
+-		pid, err := ioutil.ReadFile(s.pidfile)
++	if s.state.pid == 0 {
++		pid, err := ioutil.ReadFile(s.vmConfig.pidFile)
+ 		if err != nil {
+ 			s.Logger().WithError(err).Error("Read pid file failed.")
+ 			return []int{0}
+@@ -1031,15 +1505,12 @@ func (s *stratovirt) getPids() []int {
+ 			return []int{0}
+ 		}
+ 
+-		pids = append(pids, p)
+-		s.pid = p
++		s.state.pid = p
+ 	}
+ 
+-	return pids
+-}
++	pids = append(pids, s.state.pid)
+ 
+-func (s *stratovirt) getVirtioFsPid() *int {
+-	return nil
++	return pids
+ }
+ 
+ func (s *stratovirt) fromGrpc(ctx context.Context, hypervisorConfig *HypervisorConfig, j []byte) error {
+@@ -1051,8 +1522,12 @@ func (s *stratovirt) toGrpc(ctx context.Context) ([]byte, error) {
+ }
+ 
+ func (s *stratovirt) check() error {
+-	if err := syscall.Kill(s.pid, syscall.Signal(0)); err != nil {
+-		return errors.Wrapf(err, "Failed to ping StratoVirt process")
++	if err := s.qmpSetup(); err != nil {
++		return err
++	}
++
++	if _, err := s.qmpMonitorCh.qmp.ExecuteQueryStatus(s.qmpMonitorCh.ctx); err != nil {
++		return err
+ 	}
+ 
+ 	return nil
+@@ -1074,12 +1549,9 @@ func (s *stratovirt) save() (p persistapi.HypervisorState) {
+ }
+ 
+ func (s *stratovirt) load(p persistapi.HypervisorState) {
+-	s.pid = p.Pid
+-
+-	return
++	s.state.pid = p.Pid
+ }
+ 
+ func (s *stratovirt) setSandbox(sandbox *Sandbox) {
+ 	s.sandbox = sandbox
+-	return
+ }
+-- 
+2.20.1.windows.1
+

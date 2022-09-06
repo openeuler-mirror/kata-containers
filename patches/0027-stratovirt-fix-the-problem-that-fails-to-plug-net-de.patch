@@ -1,0 +1,46 @@
+From 9ac9c120a51663fa98ef25d721c321e5d16b3859 Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Sat, 26 Feb 2022 17:25:11 +0800
+Subject: [PATCH] stratovirt: fix the problem that fails to plug net device
+
+In kernel, hot plug pcie device needs to sleep 100ms to avoid
+misoperation. Kata 1.x version agent monitor the plug event to
+make sure plug device success. But kata 2.x does not provide
+method. It may failed to get net device after plug the device.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/virtcontainers/stratovirt.go | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index ffe8965..27b45b7 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -39,6 +39,7 @@ const (
+ 	iothreadID                   = "iothread_block"
+ 	mmioBlkCount                 = 4
+ 	mmioNetCount                 = 2
++	hotPlugDelayTime             = 200
+ )
+ 
+ const (
+@@ -1540,6 +1541,7 @@ func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op opera
+ 		if err := s.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(s.qmpMonitorCh.ctx, tap.ID, tap.ID, endpoint.HardwareAddr(), devAddr, bus, "", 0, false); err != nil {
+ 			return err
+ 		}
++		time.Sleep(time.Millisecond * hotPlugDelayTime)
+ 	case removeDevice:
+ 		if errDel := s.delDevSlot(endpoint.Name()); errDel != nil {
+ 			s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
+@@ -1670,6 +1672,7 @@ func (s *stratovirt) hotplugVFIO(ctx context.Context, device *config.VFIODev, op
+ 		if err = s.qmpMonitorCh.qmp.ExecutePCIVFIODeviceAdd(s.qmpMonitorCh.ctx, device.ID, device.BDF, devAddr, bus, ""); err != nil {
+ 			return err
+ 		}
++		time.Sleep(time.Millisecond * hotPlugDelayTime)
+ 	case removeDevice:
+ 		if errDel := s.delDevSlot(device.ID); errDel != nil {
+ 			s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
+-- 
+2.20.1.windows.1
+

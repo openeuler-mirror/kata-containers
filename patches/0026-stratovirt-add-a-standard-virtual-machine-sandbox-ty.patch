@@ -1,0 +1,771 @@
+From 8c0dd0f91366910b3029cb982a3cb807bdbb34cf Mon Sep 17 00:00:00 2001
+From: "Xinle.Guo" <guoxinle1@huawei.com>
+Date: Fri, 14 Jan 2022 17:07:37 +0800
+Subject: [PATCH] stratovirt: add a standard virtual machine sandbox type to
+ kata container
+
+Because stratovirt supports both microVM and standardVM
+architectures, adapts two sandbox types for kata container.
+Besides basic features, it also support virtio-fs, hotplug
+VFIO, support more devices.
+
+Signed-off-by: Xinle.Guo <guoxinle1@huawei.com>
+---
+ src/runtime/pkg/katautils/config.go      |   1 +
+ src/runtime/virtcontainers/stratovirt.go | 482 ++++++++++++++++++++---
+ 2 files changed, 438 insertions(+), 45 deletions(-)
+
+diff --git a/src/runtime/pkg/katautils/config.go b/src/runtime/pkg/katautils/config.go
+index e523ed3..b04cdee 100644
+--- a/src/runtime/pkg/katautils/config.go
++++ b/src/runtime/pkg/katautils/config.go
+@@ -1007,6 +1007,7 @@ func newStratovirtHypervisorConfig(h hypervisor) (vc.HypervisorConfig, error) {
+ 		BlockDeviceCacheDirect:  h.BlockDeviceCacheDirect,
+ 		BlockDeviceCacheNoflush: h.BlockDeviceCacheNoflush,
+ 		EnableIOThreads:         h.EnableIOThreads,
++		PCIeRootPort:            h.PCIeRootPort,
+ 		DisableVhostNet:         h.DisableVhostNet,
+ 		EnableVhostUserStore:    h.EnableVhostUserStore,
+ 		VhostUserStorePath:      h.vhostUserStorePath(),
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index 4fcfb94..ffe8965 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -14,14 +14,14 @@ import (
+ 	"time"
+ 
+ 	govmmQemu "github.com/kata-containers/govmm/qemu"
+-	"github.com/pkg/errors"
+-	"github.com/sirupsen/logrus"
+-
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/device/config"
+ 	persistapi "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/persist/api"
++	vcTypes "github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/types"
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/pkg/uuid"
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/types"
+ 	"github.com/kata-containers/kata-containers/src/runtime/virtcontainers/utils"
++	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ 	"go.opentelemetry.io/otel"
+ 	otelLabel "go.opentelemetry.io/otel/label"
+ 	otelTrace "go.opentelemetry.io/otel/trace"
+@@ -44,6 +44,11 @@ const (
+ const (
+ 	WaitSandboxTimeoutSecs              = 15
+ 	MachineTypeMicrovm                  = "microvm"
++	MachineTypeQ35                      = "q35"
++	MachineTypeVirt                     = "virt"
++	RootPortPrefix                      = "pcie"
++	Q35PFlashCode                       = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
++	VirtPFlashCode                      = "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw"
+ 	MmioBus                VirtioDriver = "mmio"
+ 	PciBus                 VirtioDriver = "pci"
+ )
+@@ -67,6 +72,42 @@ func (d VirtioDriver) getDriver(config *vmConfig) VirtioDriver {
+ 	}
+ }
+ 
++type rootPortDevice struct {
++	id       string
++	port     string
++	bus      string
++	slot     int
++	plugged  bool
++	addedDev string
++}
++
++func (r rootPortDevice) isVaild() bool {
++	if r.id == "" || r.port == "" {
++		return false
++	}
++	return true
++}
++
++func (r rootPortDevice) getParams(config *vmConfig) []string {
++	if !r.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var devParams []Param
++	devParams = append(devParams, Param{"id", r.id})
++	devParams = append(devParams, Param{"port", r.port})
++	if r.bus == "" {
++		r.bus = "pcie.0"
++	}
++	devParams = append(devParams, Param{"bus", r.bus})
++	devParams = append(devParams, Param{"addr", fmt.Sprintf("%d", r.slot)})
++
++	driver := "pcie-root-port"
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(devParams, "="), ",")))
++	return params
++}
++
+ type blkDevice struct {
+ 	id       string
+ 	filePath string
+@@ -179,6 +220,56 @@ func (n netDevice) getParams(config *vmConfig) []string {
+ 	return params
+ }
+ 
++type virtioFs struct {
++	driver   VirtioDriver
++	backend  string
++	charID   string
++	charDev  string
++	tag      string
++	deviceID string
++	bus      string
++	addr     string
++}
++
++var virtiofsDriver = map[VirtioDriver]string{
++	MmioBus: "vhost-user-fs-device",
++	PciBus:  "vhost-user-fs-pci",
++}
++
++func (v virtioFs) isVaild() bool {
++	if v.charID == "" || v.charDev == "" || v.deviceID == "" {
++		return false
++	}
++	return true
++}
++
++func (v virtioFs) getParams(config *vmConfig) []string {
++	if !v.isVaild() {
++		return nil
++	}
++
++	var params []string
++	var charParams []Param
++	var fsParams []Param
++
++	charParams = append(charParams, Param{"id", v.charID})
++	charParams = append(charParams, Param{"path", config.fsSockPath})
++
++	v.driver = v.driver.getDriver(config)
++	driver := virtiofsDriver[v.driver]
++	fsParams = append(fsParams, Param{"chardev", v.charDev})
++	fsParams = append(fsParams, Param{"tag", v.tag})
++	fsParams = append(fsParams, Param{"id", v.deviceID})
++	if v.bus != "" {
++		fsParams = append(fsParams, Param{"bus", v.bus})
++		fsParams = append(fsParams, Param{"addr", v.addr})
++	}
++
++	params = append(params, "-chardev", fmt.Sprintf("%s,%s,server,nowait", v.backend, strings.Join(SerializeParams(charParams, "="), ",")))
++	params = append(params, "-device", fmt.Sprintf("%s,%s", driver, strings.Join(SerializeParams(fsParams, "="), ",")))
++	return params
++}
++
+ type vhostVsock struct {
+ 	driver  VirtioDriver
+ 	id      string
+@@ -442,6 +533,12 @@ func (c *vmConfig) appendDevices(params *[]string) {
+ 	for _, d := range c.devices {
+ 		*params = append(*params, d.getParams(c)...)
+ 	}
++
++	if c.machineType == MachineTypeMicrovm {
++		return
++	}
++	// Add flag to unplug devices from their root port faster.
++	*params = append(*params, "-global", "pcie-root-port.fast-unplug=1")
+ }
+ 
+ func (c *vmConfig) appendPFlash(params *[]string) {
+@@ -499,6 +596,8 @@ func (c *vmConfig) appendIncoming(params *[]string) {
+ type State struct {
+ 	mmioBlkSlots [mmioBlkCount]bool
+ 	mmioNetSlots [mmioNetCount]bool
++	// The list of RootPorts that can be hot-added.
++	rootPort     []rootPortDevice
+ 	pid          int
+ 	virtiofsPid  int
+ }
+@@ -558,6 +657,26 @@ func (s *stratovirt) getKernelParams(machineType string, initrdPath string) (str
+ 	return strings.Join(params, " "), nil
+ }
+ 
++func (s *stratovirt) getPFlash(machineType string) ([]string, error) {
++	if s.config.PFlash != nil {
++		return s.config.PFlash, nil
++	}
++
++	var PFlash []string
++	switch machineType {
++	case MachineTypeQ35:
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", Q35PFlashCode))
++	case MachineTypeVirt:
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", VirtPFlashCode))
++	case MachineTypeMicrovm:
++		return nil, nil
++	default:
++		return nil, fmt.Errorf("failed to match machine type %s", machineType)
++	}
++
++	return PFlash, nil
++}
++
+ func (s *stratovirt) createQMPSocket(vmPath string) govmmQemu.QMPSocket {
+ 	socketPath := filepath.Join(vmPath, apiSocket)
+ 
+@@ -590,6 +709,34 @@ func (s *stratovirt) createDevices() []VirtioDev {
+ 		}
+ 	}
+ 
++	// Create root port for all devices that need to be hot-added.
++	if s.vmConfig.machineType != MachineTypeMicrovm && s.config.PCIeRootPort > 0 {
++		devices = s.appendRootPort(ctx, devices)
++	}
++
++	return devices
++}
++
++func (s *stratovirt) appendRootPort(ctx context.Context, devices []VirtioDev) []VirtioDev {
++	number := s.config.PCIeRootPort
++
++	for i := uint32(1); i < number+1; i++ {
++		addr, err := s.vmConfig.rootBus.AddDevice(ctx, fmt.Sprintf("%s.%d", RootPortPrefix, i))
++		if err != nil {
++			return devices
++		}
++
++		rp := rootPortDevice{
++			id:       fmt.Sprintf("%s.%d", RootPortPrefix, i),
++			port:     fmt.Sprintf("%d", i),
++			bus:      defaultBridgeBus,
++			slot:     int(addr),
++			addedDev: "",
++		}
++		s.state.rootPort = append(s.state.rootPort, rp)
++		devices = append(devices, rp)
++	}
++
+ 	return devices
+ }
+ 
+@@ -729,6 +876,38 @@ func (s *stratovirt) appendNetwork(ctx context.Context, devices []VirtioDev, end
+ 	return devices
+ }
+ 
++func (s *stratovirt) appendVirtioFs(ctx context.Context, devices []VirtioDev, volume types.Volume) []VirtioDev {
++	if s.config.SharedFS != config.VirtioFS {
++		return devices
++	}
++
++	var bus string
++	var addr uint32
++	var err error
++	name := "virtio_fs"
++
++	if s.vmConfig.machineType != MachineTypeMicrovm {
++		bus = "pcie.0"
++		addr, err = s.vmConfig.rootBus.AddDevice(ctx, name)
++		if err != nil {
++			return devices
++		}
++	}
++
++	devices = append(devices, virtioFs{
++		backend:  "socket",
++		// Virtio-fs must be bound to unique charDev, it uses the same name.
++		charID:   name,
++		charDev:  name,
++		tag:      volume.MountTag,
++		deviceID: "virtio-fs0",
++		bus:      bus,
++		addr:     fmt.Sprintf("%d", addr),
++	})
++
++	return devices
++}
++
+ func (s *stratovirt) setVMConfig(id string, hypervisorConfig *HypervisorConfig) error {
+ 	span, _ := s.trace(s.ctx, "setStratoVirtUp")
+ 	defer span.End()
+@@ -765,7 +944,10 @@ func (s *stratovirt) setVMConfig(id string, hypervisorConfig *HypervisorConfig)
+ 		return err
+ 	}
+ 
+-	var PFlash []string
++	PFlash, err := s.getPFlash(machineType)
++	if err != nil {
++		return err
++	}
+ 
+ 	vmPath := filepath.Join(s.store.RunVMStoragePath(), s.id)
+ 	qmpSocket := s.createQMPSocket(vmPath)
+@@ -852,8 +1034,33 @@ func (s *stratovirt) setOzone() error {
+ 	return nil
+ }
+ 
+-func (s *stratovirt) hypervisorConfig() HypervisorConfig {
+-	return s.config
++// Virtio fs daemon is a shared file system that lets VM access a directory
++// tree on the host.
++func (s *stratovirt) setupVirtioFs() error {
++	if !s.config.DisableBlockDeviceUse || s.config.SharedFS != config.VirtioFS {
++		return nil
++	}
++
++	if _, err := os.Stat(s.config.VirtioFSDaemon); os.IsNotExist(err) {
++		return fmt.Errorf("virtiofsd path (%s) does not exist", s.config.VirtioFSDaemon)
++	}
++
++	args := []string{
++		"-socket-path", filepath.Join(s.vmConfig.vmPath, "virtiofs_kata.sock"),
++		"-source", getSharePath(s.id)}
++	if len(s.config.VirtioFSExtraArgs) != 0 {
++		args = append(args, s.config.VirtioFSExtraArgs...)
++	}
++
++	cmd := exec.Command(s.config.VirtioFSDaemon, args...)
++	s.Logger().Info("Virtiofsd start with cmd: ", cmd)
++
++	if err := cmd.Start(); err != nil {
++		return fmt.Errorf("failed to strat virtiofsd: %v", cmd)
++	}
++
++	s.state.virtiofsPid = cmd.Process.Pid
++	return nil
+ }
+ 
+ // Get StratoVirt binary path.
+@@ -873,6 +1080,10 @@ func (s *stratovirt) binPath() (string, error) {
+ 	return path, nil
+ }
+ 
++func (s *stratovirt) hypervisorConfig() HypervisorConfig {
++	return s.config
++}
++
+ func (s *stratovirt) createSandbox(ctx context.Context, id string, networkNS NetworkNamespace, hypervisorConfig *HypervisorConfig) error {
+ 	var span otelTrace.Span
+ 	span, _ = s.trace(ctx, "createSandbox")
+@@ -1000,6 +1211,10 @@ func (s *stratovirt) startSandbox(ctx context.Context, timeout int) error {
+ 		}
+ 	}()
+ 
++	if err = s.setupVirtioFs(); err != nil {
++		return err
++	}
++
+ 	var params []string
+ 	s.createBaseParams(s.vmConfig, &params)
+ 
+@@ -1134,28 +1349,29 @@ func (s *stratovirt) addDevice(ctx context.Context, devInfo interface{}, devType
+ 		s.vmConfig.devices = s.appendNetwork(ctx, s.vmConfig.devices, v)
+ 	case config.BlockDrive:
+ 		s.vmConfig.devices = s.appendBlock(ctx, s.vmConfig.devices)
++	case types.Volume:
++		s.vmConfig.devices = s.appendVirtioFs(ctx, s.vmConfig.devices, v)
+ 	default:
+ 		s.Logger().WithField("dev-type", v).Warn("Could not append device: unsupported device type")
+ 	}
+ 	return nil
+ }
+ 
+-func (s *stratovirt) getDevSlot(Name string, isPut bool) (slot int, err error) {
++func (s *stratovirt) setupMmioSlot(Name string, isPut bool) (int, error) {
+ 	Name = filepath.Base(strings.ToLower(Name))
+-
+ 	if strings.HasPrefix(Name, "eth") {
+ 		idxStr := strings.TrimPrefix(Name, "eth")
+ 		if idxStr == Name {
+-			return 0, fmt.Errorf("Could not parse idx from Name %q", Name)
++			return 0, fmt.Errorf("could not parse idx from name %q", Name)
+ 		}
+ 
+ 		idx, err := strconv.Atoi(idxStr)
+ 		if err != nil {
+-			return 0, fmt.Errorf("Could not convert to int from Str %q", idxStr)
++			return 0, fmt.Errorf("could not convert to int from str %q", idxStr)
+ 		}
+ 
+ 		if !isPut && s.state.mmioNetSlots[idx] {
+-			return 0, fmt.Errorf("GetDevSlot failed, slot is being used %q", idxStr)
++			return 0, fmt.Errorf("failed to setup mmio slot, slot is being used %q", idxStr)
+ 		}
+ 		s.state.mmioNetSlots[idx] = !isPut
+ 
+@@ -1163,25 +1379,80 @@ func (s *stratovirt) getDevSlot(Name string, isPut bool) (slot int, err error) {
+ 	} else if strings.HasPrefix(Name, "vd") {
+ 		charStr := strings.TrimPrefix(Name, "vd")
+ 		if charStr == Name {
+-			return 0, fmt.Errorf("Could not parse idx from Name %q", Name)
++			return 0, fmt.Errorf("could not parse idx from name %q", Name)
+ 		}
+ 
+ 		char := []rune(charStr)
+ 		idx := int(char[0] - 'a')
+ 
+ 		if !isPut && s.state.mmioBlkSlots[idx] {
+-			return 0, fmt.Errorf("GetDevSlot failed, slot is being used %q", charStr)
++			return 0, fmt.Errorf("failed to setup mmio slot, slot is being used %q", charStr)
+ 		}
+ 		s.state.mmioBlkSlots[idx] = !isPut
+ 
+ 		return idx, nil
+ 	}
+ 
+-	return 0, fmt.Errorf("GetDevSlot failed, Name is invalid %q", Name)
++	return 0, fmt.Errorf("failed to setup mmio slot , Name is invalid %q", Name)
++}
++
++func (s *stratovirt) setupPciSlot(Name string, isPut bool) (string, int, error) {
++	rootports := &s.state.rootPort
++	if len(*rootports) == 0 {
++		return "", 0, fmt.Errorf("failed to get available address from bridges")
++	}
++
++	for i, rootport := range *rootports {
++		if !isPut && !rootport.plugged && rootport.addedDev == "" {
++			(*rootports)[i].plugged = true
++			(*rootports)[i].addedDev = Name
++			return rootport.id, rootport.slot, nil
++		} else if isPut && rootport.plugged && rootport.addedDev == Name {
++			(*rootports)[i].plugged = false
++			(*rootports)[i].addedDev = ""
++			return rootport.id, rootport.slot, nil
++		}
++	}
++
++	return "", 0, fmt.Errorf("no more bridge slots available")
++}
++
++func (s *stratovirt) getDevSlot(Name string) (string, int, error) {
++	if s.config.HypervisorMachineType == MachineTypeMicrovm {
++		slot, err := s.setupMmioSlot(Name, false)
++		if err != nil {
++			return "", 0, err
++		}
++
++		return "", slot, nil
++	}
++
++	bus, slot, err := s.setupPciSlot(Name, false)
++	if err != nil {
++		return "pcie.0", 0, err
++	}
++
++	return bus, slot, nil
++}
++
++func (s *stratovirt) delDevSlot(Name string) error {
++	if s.vmConfig.machineType == MachineTypeMicrovm {
++		if _, err := s.setupMmioSlot(Name, true); err != nil {
++			return err
++		}
++
++		return nil
++	}
++
++	if _, _, err := s.setupPciSlot(Name, true); err != nil {
++		return err
++	}
++
++	return nil
+ }
+ 
+-func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op operation) (err error) {
+-	err = s.qmpSetup()
++func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op operation) error {
++	err := s.qmpSetup()
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -1198,6 +1469,14 @@ func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op opera
+ 		return fmt.Errorf("Endpoint is not supported")
+ 	}
+ 
++	defer func() {
++		if err != nil {
++			if errDel := s.delDevSlot(endpoint.Name()); errDel != nil {
++				s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++			}
++		}
++	}()
++
+ 	switch op {
+ 	case addDevice:
+ 		var (
+@@ -1220,27 +1499,51 @@ func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op opera
+ 			VhostFdNames = append(VhostFdNames, fdName)
+ 		}
+ 
+-		slot, err := s.getDevSlot(endpoint.Name(), false)
++		bus, slot, err := s.getDevSlot(endpoint.Name())
+ 		if err != nil {
+-			return fmt.Errorf("Could not get unused slot for %q", endpoint.Name())
++			return fmt.Errorf("could not get unused slot for %q", endpoint.Name())
+ 		}
+ 
+ 		if len(VMFdNames) != 0 || len(VhostFdNames) != 0 {
+ 			if err := s.qmpMonitorCh.qmp.ExecuteNetdevAddByFds(s.qmpMonitorCh.ctx, "tap", tap.ID, VMFdNames, VhostFdNames); err != nil {
+-				s.getDevSlot(endpoint.Name(), true)
+ 				return err
+ 			}
+ 		} else {
+ 			if err := s.qmpMonitorCh.qmp.ExecuteNetdevAdd(s.qmpMonitorCh.ctx, "tap", tap.ID, tap.TAPIface.Name, "no", "no", 0); err != nil {
+-				s.getDevSlot(endpoint.Name(), true)
+ 				return err
+ 			}
+ 		}
+-		if err := s.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(s.qmpMonitorCh.ctx, tap.Name, tap.ID, endpoint.HardwareAddr(), fmt.Sprintf("%d", slot), "", "", 0, false); err != nil {
+-			s.getDevSlot(endpoint.Name(), true)
++
++		// The slot of net device that hotplugged to the root port 
++		// must be zero.
++		devAddr := "0x0.0x0"
++		if s.vmConfig.machineType == MachineTypeMicrovm {
++			devAddr = fmt.Sprintf("%d", slot)
++		} else { 
++			bridgeSlot, err := vcTypes.PciSlotFromInt(slot)
++			if err != nil {
++				return err
++			}
++
++			devSlot, err := vcTypes.PciSlotFromString("0")
++			if err != nil {
++				return err
++			}
++
++			pciPath, err := vcTypes.PciPathFromSlots(bridgeSlot, devSlot)
++			if err != nil {
++				return err
++			}
++			endpoint.SetPciPath(pciPath)
++		}
++
++		if err := s.qmpMonitorCh.qmp.ExecuteNetPCIDeviceAdd(s.qmpMonitorCh.ctx, tap.ID, tap.ID, endpoint.HardwareAddr(), devAddr, bus, "", 0, false); err != nil {
+ 			return err
+ 		}
+ 	case removeDevice:
++		if errDel := s.delDevSlot(endpoint.Name()); errDel != nil {
++			s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++		}
+ 		if err := s.qmpMonitorCh.qmp.ExecuteDeviceDel(s.qmpMonitorCh.ctx, tap.ID); err != nil {
+ 			return err
+ 		}
+@@ -1248,58 +1551,134 @@ func (s *stratovirt) hotplugNet(ctx context.Context, endpoint Endpoint, op opera
+ 			return err
+ 		}
+ 	default:
+-		return fmt.Errorf("Operation is not supported")
++		return fmt.Errorf("operation is not supported")
+ 	}
+ 
+ 	return nil
+ }
+ 
+-func (s *stratovirt) hotplugBlk(drive *config.BlockDrive, op operation) (err error) {
+-	var filePath string
+-	err = s.qmpSetup()
++func (s *stratovirt) hotplugBlk(ctx context.Context, drive *config.BlockDrive, op operation) error {
++	err := s.qmpSetup()
+ 	if err != nil {
+ 		return err
+ 	}
+ 
++	driver := "virtio-blk-pci"
++	if s.vmConfig.machineType == MachineTypeMicrovm {
++		driver = "virtio-blk-mmio"
++	}
++
++	defer func() {
++		if err != nil {
++			s.qmpMonitorCh.qmp.ExecuteBlockdevDel(s.qmpMonitorCh.ctx, drive.ID)
++			if errDel := s.delDevSlot(drive.VirtPath); errDel != nil {
++				s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++			}
++		}
++	}()
++
+ 	switch op {
+ 	case addDevice:
+-		driver := "virtio-blk-mmio"
++		filePath := drive.File
+ 		if s.vmConfig.useOzone {
+ 			filePath, err = s.updateOzoneRes(drive.File, true)
+-			if err != nil {
+-				return fmt.Errorf("Failed to update ozone resources")
+-			}
+-		} else {
+-			filePath = drive.File
+-		}
+-		slot, err := s.getDevSlot(drive.VirtPath, false)
+-		if err != nil {
+-			return fmt.Errorf("Could not get unused slot for %q", drive.VirtPath)
+ 		}
+ 
+ 		if err := s.qmpMonitorCh.qmp.ExecuteBlockdevAdd(s.qmpMonitorCh.ctx, filePath, drive.ID, false); err != nil {
+-			s.getDevSlot(drive.VirtPath, true)
+ 			return err
+ 		}
+ 
+-		if err := s.qmpMonitorCh.qmp.ExecutePCIDeviceAdd(s.qmpMonitorCh.ctx, drive.ID, drive.ID, driver, fmt.Sprintf("%d", slot), "", "", 0, true, false); err != nil {
+-			s.getDevSlot(drive.VirtPath, true)
++		bus, slot, err := s.getDevSlot(drive.VirtPath)
++		if err != nil {
++			return err
++		}
++
++		// The slot of block device that hotplugged to the root port 
++		// must be zero.
++		devAddr := "0x0.0x0"
++		if s.vmConfig.machineType == MachineTypeMicrovm {
++			devAddr = fmt.Sprintf("%d", slot)
++		} else {
++			bridgeSlot, err := vcTypes.PciSlotFromInt(slot)
++			if err != nil {
++				return err
++			}
++
++			devSlot, err := vcTypes.PciSlotFromString("0")
++			if err != nil {
++				return err
++			}
++
++			drive.PCIPath, err = vcTypes.PciPathFromSlots(bridgeSlot, devSlot)
++			if err != nil {
++				return err
++			}
++		}
++
++		if err := s.qmpMonitorCh.qmp.ExecutePCIDeviceAdd(s.qmpMonitorCh.ctx, drive.ID, drive.ID, driver, devAddr, bus, "", 0, false, false); err != nil {
+ 			return err
+ 		}
+ 	case removeDevice:
+ 		if s.vmConfig.useOzone {
+ 			s.updateOzoneRes(drive.File, false)
+ 		}
++
++		if errDel := s.delDevSlot(drive.VirtPath); errDel != nil {
++			s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++		}
+ 		if err := s.qmpMonitorCh.qmp.ExecuteDeviceDel(s.qmpMonitorCh.ctx, drive.ID); err != nil {
+ 			return err
+ 		}
+ 		if err := s.qmpMonitorCh.qmp.ExecuteBlockdevDel(s.qmpMonitorCh.ctx, drive.ID); err != nil {
+ 			return err
+ 		}
++	default:
++		return fmt.Errorf("operation is not supported %d", op)
++	}
++
++	return nil
++}
++
++func (s *stratovirt) hotplugVFIO(ctx context.Context, device *config.VFIODev, op operation) error {
++	err := s.qmpSetup()
++	if err != nil {
++		return err
++	}
++
++	defer func() {
++		if err != nil {
++			if errDel := s.delDevSlot(device.ID); errDel != nil {
++				s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++			}
++		}
++	}()
+ 
+-		s.getDevSlot(drive.VirtPath, true)
++	switch op {
++	case addDevice:
++		var bus string
++		// The slot of block device that hotplugged to the root port 
++		// must be zero.
++		devAddr := "0x0.0x0"
++		// The vfio device BDF format is 0000:1a:00.3
++		device.BDF = "0000:" + device.BDF
++
++		bus, _, err = s.getDevSlot(device.ID)
++		if err != nil {
++			return err
++		}
++
++		if err = s.qmpMonitorCh.qmp.ExecutePCIVFIODeviceAdd(s.qmpMonitorCh.ctx, device.ID, device.BDF, devAddr, bus, ""); err != nil {
++			return err
++		}
++	case removeDevice:
++		if errDel := s.delDevSlot(device.ID); errDel != nil {
++			s.Logger().WithError(errDel).Warnf("Failed to delete device slot.")
++		}
++		if err := s.qmpMonitorCh.qmp.ExecuteDeviceDel(s.qmpMonitorCh.ctx, device.ID); err != nil {
++			return err
++		}
+ 	default:
+-		return fmt.Errorf("Operation is not supported")
++		return fmt.Errorf("operation is not supported %d", op)
+ 	}
+ 
+ 	return nil
+@@ -1313,9 +1692,11 @@ func (s *stratovirt) hotplugAddDevice(ctx context.Context, devInfo interface{},
+ 	case netDev:
+ 		return nil, s.hotplugNet(ctx, devInfo.(Endpoint), addDevice)
+ 	case blockDev:
+-		return nil, s.hotplugBlk(devInfo.(*config.BlockDrive), addDevice)
++		return nil, s.hotplugBlk(ctx, devInfo.(*config.BlockDrive), addDevice)
++	case vfioDev:
++		return nil, s.hotplugVFIO(ctx, devInfo.(*config.VFIODev), addDevice)
+ 	default:
+-		return nil, fmt.Errorf("Hotplug add device failed: unsupported device type '%v'", devType)
++		return nil, fmt.Errorf("hotplug add device failed: unsupported device type '%v'", devType)
+ 	}
+ }
+ 
+@@ -1327,9 +1708,11 @@ func (s *stratovirt) hotplugRemoveDevice(ctx context.Context, devInfo interface{
+ 	case netDev:
+ 		return nil, s.hotplugNet(ctx, devInfo.(Endpoint), removeDevice)
+ 	case blockDev:
+-		return nil, s.hotplugBlk(devInfo.(*config.BlockDrive), removeDevice)
++		return nil, s.hotplugBlk(ctx, devInfo.(*config.BlockDrive), removeDevice)
++	case vfioDev:
++		return nil, s.hotplugVFIO(ctx, devInfo.(*config.VFIODev), removeDevice)
+ 	default:
+-		return nil, fmt.Errorf("Hotplug remove device: unsupported device type '%v'", devType)
++		return nil, fmt.Errorf("hotplug remove device: unsupported device type '%v'", devType)
+ 	}
+ }
+ 
+@@ -1371,6 +1754,10 @@ func (s *stratovirt) capabilities(ctx context.Context) types.Capabilities {
+ 	var caps types.Capabilities
+ 	caps.SetBlockDeviceHotplugSupport()
+ 
++	if s.config.DisableBlockDeviceUse && s.config.SharedFS == config.VirtioFS {
++		caps.SetFsSharingSupport()
++	}
++
+ 	return caps
+ }
+ 
+@@ -1510,6 +1897,9 @@ func (s *stratovirt) getPids() []int {
+ 
+ 	pids = append(pids, s.state.pid)
+ 
++	if s.state.virtiofsPid != 0 {
++		pids = append(pids, s.state.virtiofsPid)
++	}
+ 	return pids
+ }
+ 
+@@ -1544,12 +1934,14 @@ func (s *stratovirt) isRateLimiterBuiltin() bool {
+ func (s *stratovirt) save() (p persistapi.HypervisorState) {
+ 	pids := s.getPids()
+ 	p.Pid = pids[0]
++	p.VirtiofsdPid = s.state.virtiofsPid
+ 	p.Type = string(StratovirtHypervisor)
+ 	return
+ }
+ 
+ func (s *stratovirt) load(p persistapi.HypervisorState) {
+ 	s.state.pid = p.Pid
++	s.state.virtiofsPid = p.VirtiofsdPid
+ }
+ 
+ func (s *stratovirt) setSandbox(sandbox *Sandbox) {
+-- 
+2.20.1.windows.1
+

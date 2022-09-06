@@ -1,0 +1,30 @@
+From a6e9215b77ee3e6d912b47dd70c219c0f5547ea2 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Thu, 3 Mar 2022 14:36:23 +0800
+Subject: [PATCH] kata-runtime: modify build flags for containerd-kata-shimv2
+
+Signed-off-by: holyfei <yangfeiyu20092010@163.com>
+---
+ Makefile | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Makefile b/Makefile
+index 9957db9..b71abbf 100644
+--- a/Makefile
++++ b/Makefile
+@@ -571,7 +571,11 @@ $(TARGET_OUTPUT): $(SOURCES) $(GENERATED_FILES) $(MAKEFILE_LIST) | show-summary
+ 	go build $(KATA_LDFLAGS) $(BUILDFLAGS) -o $@ -ldflags "-linkmode=external" .)
+ 
+ $(SHIMV2_OUTPUT): $(SOURCES) $(GENERATED_FILES) $(MAKEFILE_LIST)
+-	$(QUIET_BUILD)(cd $(SHIMV2_DIR)/ && go build $(KATA_LDFLAGS) -i -o $@ .)
++	$(QUIET_BUILD)(cd $(SHIMV2_DIR)/ && \
++	CGO_CFLAGS="-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O2" \
++	CGO_LDFLAGS_ALLOW="-Wl,-z,relro,-z,now" \
++	CGO_LDFLAGS="-Wl,-z,relro,-z,now -Wl,-z,noexecstack" \
++	go build $(KATA_LDFLAGS) $(BUILDFLAGS) -o $@ -ldflags "-linkmode=external" .)
+ 
+ .PHONY: \
+ 	check \
+-- 
+1.8.3.1
+

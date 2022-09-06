@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 19
+%define RELEASE 23
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -61,6 +61,11 @@ make proxy
 make shim
 make initrd
 cp -f ./runtime/containerd-shim-kata-v2 ./build/
+%ifarch %{ix86} x86_64
+sed -i 's/^hypervisor_params.*$/hypervisor_params = \"\"/' ./runtime/cli/config/configuration-qemu.toml
+%else
+sed -i 's/^hypervisor_params.*$/hypervisor_params = \"kvm-pit.lost_tick_policy=discard pcie-root-port.x-speed=16 pcie-root-port.x-width=32\"/' ./runtime/cli/config/configuration-qemu.toml
+%endif
 
 %install
 mkdir -p -m 755  %{buildroot}/var/lib/kata
@@ -93,6 +98,30 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Thu Mar 3 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-23
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:modify runtime build flags
+
+* Mon Feb 28 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-22
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:use host_device drive when call blockdev-add
+
+* Fri Feb 25 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-21
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:modify hypervisor parameters in config file
+
+* Mon Feb 21 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-20
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC:check file size before add nic
+
 * Fri Jan 7 2022 yangfeiyu <yangfeiyu2@huawei.com> - 1.11.1-19
 - Type:bugfix
 - ID:NA

@@ -1,0 +1,60 @@
+From a4776b4a5cfd80d983b26dc8991bdcf1cfb9ad4a Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Thu, 10 Dec 2020 18:54:09 -0500
+Subject: [PATCH] kata-runtime: change sandbox state to unhealthy when cmd is
+ kill or delete
+
+reason: If qemu or kata-proxy process's state is D and execute command
+isn't kill or delete, we should not change sandbox state to unhealthy,
+because D state maybe change to normal soon. So we change the sandbox
+state to unhealthy only when execute command is kill or delete.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+Change-Id: I21ac55aecae9bf83b6f877832c5976698bc9dbf7
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/api.go | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index 38c8235..0a6ba59 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -1117,16 +1117,6 @@ func CleanupContainer(ctx context.Context, sandboxID, containerID string, force
+ // procesUnhealthySandbox only change sandbox state to unhealthy
+ // when caller is kata-runtime kill or kata-runtime delete
+ func processUnhealthySandbox(sandbox *Sandbox, container *Container) error {
+-	// Set all containers state to unhealthy
+-	if err := sandbox.setContainersState(types.StateUnhealthy); err != nil {
+-		container.Logger().WithError(err).Warn("set all containers state to unhealthy fail")
+-	}
+-
+-	// Set sandbox state to unhealthy
+-	if err := sandbox.setSandboxState(types.StateUnhealthy); err != nil {
+-		container.Logger().WithError(err).Warn("set sandbox state to unhealthy fail")
+-	}
+-
+ 	forceDelete := false
+ 
+ 	// If process is kata-runtime kill or kata-runtime delete,
+@@ -1138,6 +1128,16 @@ func processUnhealthySandbox(sandbox *Sandbox, container *Container) error {
+ 	}
+ 
+ 	if forceDelete {
++		// Set all containers state to unhealthy
++		if err := sandbox.setContainersState(types.StateUnhealthy); err != nil {
++			container.Logger().WithError(err).Warn("set all containers state to unhealthy fail")
++		}
++
++		// Set sandbox state to unhealthy
++		if err := sandbox.setSandboxState(types.StateUnhealthy); err != nil {
++			container.Logger().WithError(err).Warn("set sandbox state to unhealthy fail")
++		}
++
+ 		// force stop podSandbox type container's kata-shim process
+ 		if err := stopShim(container.process.Pid); err != nil {
+ 			container.Logger().WithError(err).Warn("fail to stop podSandbox type container kata-shim")
+-- 
+1.8.3.1
+

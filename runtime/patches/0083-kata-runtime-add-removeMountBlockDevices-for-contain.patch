@@ -1,0 +1,59 @@
+From 490879dfd4d886bda2127d94967039771ff14d15 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Thu, 10 Dec 2020 17:21:59 +0800
+Subject: [PATCH] kata-runtime: add removeMountBlockDevices for container
+
+reason: when create container with -v, the device is created
+and stored in sandbox device manager, if create container failed
+in next steps, the rollback operation will not deal with container
+mount device(mount blockdevice)
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/container.go | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index e40e313..601860c 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -909,6 +909,11 @@ func (c *Container) rollbackFailingContainerCreation() {
+ 	if err := c.detachDevices(); err != nil {
+ 		c.Logger().WithError(err).Error("rollback failed detachDevices()")
+ 	}
++
++	if errs := c.removeMountBlockDevices(); len(errs) > 0 {
++		c.Logger().Error("rollback failed removeMountBlockDevices()")
++	}
++
+ 	if err := c.removeDrive(); err != nil {
+ 		c.Logger().WithError(err).Error("rollback failed removeDrive()")
+ 	}
+@@ -1494,6 +1499,22 @@ func (c *Container) isDriveUsed() bool {
+ 	return !(c.state.Fstype == "")
+ }
+ 
++func (c *Container) removeMountBlockDevices() []error {
++	var result []error
++	for _, mount := range c.mounts {
++		if len(mount.BlockDeviceID) > 0 {
++			if err := c.sandbox.devManager.RemoveDevice(mount.BlockDeviceID); err != nil {
++				result = append(result, err)
++				c.Logger().WithFields(logrus.Fields{
++					"container":    c.id,
++					"block-device": mount.BlockDeviceID,
++				}).WithError(err).Error("remove block device failed")
++			}
++		}
++	}
++	return result
++}
++
+ func (c *Container) removeDrive() (err error) {
+ 	if c.isDriveUsed() {
+ 		c.Logger().Info("unplugging block device")
+-- 
+2.23.0
+

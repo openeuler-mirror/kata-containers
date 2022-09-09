@@ -1,0 +1,51 @@
+From 3f422248b2521b5c9f449b4d3d61193426bd2246 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 15 Mar 2021 04:07:43 -0400
+Subject: [PATCH] kata-runtime: add sandbox file lock while call
+ GetSandboxCgroupPath
+
+reason: vci.GetSandboxCgroupPath func will load the sandbox persist.json file,
+which is shared with all the containers in the same sandbox. So need to add a
+sandbox file lock to make sure load sandbox persist.json file is mutexable.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Change-Id: I07eeb213256bd27f6d5718a65cf7e7ccbec2ecb7
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/cgroups.go | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/virtcontainers/cgroups.go b/virtcontainers/cgroups.go
+index 21708eb..6b1d193 100644
+--- a/virtcontainers/cgroups.go
++++ b/virtcontainers/cgroups.go
+@@ -22,6 +22,7 @@ import (
+ 	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	specs "github.com/opencontainers/runtime-spec/specs-go"
+ 	"github.com/sirupsen/logrus"
++	vcTypes "github.com/kata-containers/runtime/virtcontainers/pkg/types"
+ )
+ 
+ type cgroupPather interface {
+@@ -155,6 +156,16 @@ func deleteCgroup(hierarchy cgroups.Hierarchy, cgroupPath string) error {
+ 
+ // GetSandboxCgroupPath return the cgroup path of specified sandbox
+ func GetSandboxCgroupPath(ctx context.Context, sandboxID string) (string, error) {
++	if sandboxID == "" {
++		return "", vcTypes.ErrNeedSandboxID
++	}
++
++	unlock, err := rwLockSandbox(sandboxID)
++	if err != nil {
++		return "", err
++	}
++	defer unlock()
++
+ 	config, err := loadSandboxConfig(sandboxID)
+ 	if err != nil {
+ 		return "", err
+-- 
+1.8.3.1
+

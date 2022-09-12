@@ -1,0 +1,46 @@
+From dfd1e6aa9be31b0df7866c3a3dbb0ab210a02052 Mon Sep 17 00:00:00 2001
+From: jiangpengfei 00444339 <jiangpengfei9@huawei.com>
+Date: Fri, 22 Apr 2022 11:52:53 +0800
+Subject: [PATCH] kata-containers: Move from query-cpus to query-cpus-fast
+
+reason: We recently updated to using qemu-6.1 (from qemu 5.2).  Unfortunately one
+breaking change in qemu 6.0 wasn't caught by the CI.
+
+The query-cpus QMP command has been removed, replaced by query-cpus-fast
+(which has been available since qemu 2.12).  govmm already had support for
+query-cpus-fast, we just weren't using it, so the change is quite easy.
+
+fixes #2643
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+
+Signed-off-by: jiangpengfei 00444339 <jiangpengfei9@huawei.com>
+---
+ virtcontainers/qemu.go | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index c60ec02..5c55c09 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -2210,7 +2210,7 @@ func (q *qemu) getThreadIDs() (vcpuThreadIDs, error) {
+ 		return tid, err
+ 	}
+ 
+-	cpuInfos, err := q.qmpMonitorCh.qmp.ExecQueryCpus(q.qmpMonitorCh.ctx)
++	cpuInfos, err := q.qmpMonitorCh.qmp.ExecQueryCpusFast(q.qmpMonitorCh.ctx)
+ 	if err != nil {
+ 		q.Logger().WithError(err).Error("failed to query cpu infos")
+ 		return tid, err
+@@ -2219,7 +2219,7 @@ func (q *qemu) getThreadIDs() (vcpuThreadIDs, error) {
+ 	tid.vcpus = make(map[int]int, len(cpuInfos))
+ 	for _, i := range cpuInfos {
+ 		if i.ThreadID > 0 {
+-			tid.vcpus[i.CPU] = i.ThreadID
++			tid.vcpus[i.CPUIndex] = i.ThreadID
+ 		}
+ 	}
+ 	return tid, nil
+-- 
+2.33.0
+

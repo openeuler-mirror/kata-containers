@@ -1,0 +1,44 @@
+From 62678eceb1f202bdc476452f50af602fd9fde09e Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Wed, 2 Jun 2021 11:01:50 +0800
+Subject: [PATCH] kata-agent: modify log level
+
+reason: modify log level
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Change-Id: I8139f94430858ff956970d9b932b7d3d3a3ab3dd
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ agent.go | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+ mode change 100755 => 100644 agent.go
+
+diff --git a/agent.go b/agent.go
+old mode 100755
+new mode 100644
+index c3d6524..2ddad83
+--- a/agent.go
++++ b/agent.go
+@@ -1091,7 +1091,7 @@ func makeUnaryInterceptor() grpc.UnaryServerInterceptor {
+ 
+ 			agentLog.WithFields(logrus.Fields{
+ 				"request": grpcCall,
+-				"req":     message.String()}).Debug("new request")
++				"req":     message.String()}).Info("new request")
+ 			start = time.Now()
+ 		}
+ 
+@@ -1109,7 +1109,7 @@ func makeUnaryInterceptor() grpc.UnaryServerInterceptor {
+ 				"request":  info.FullMethod,
+ 				"duration": elapsed.String(),
+ 				"resp":     message.String()})
+-			logger.Debug("request end")
++			logger.Info("request end")
+ 		}
+ 
+ 		// Handle the following scenarios:
+-- 
+2.23.0
+

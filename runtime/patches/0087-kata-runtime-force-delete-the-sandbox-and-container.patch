@@ -1,0 +1,55 @@
+From 1002cdb399b19ec2d82e4254e48f8096be6119f0 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sat, 19 Dec 2020 13:15:12 -0500
+Subject: [PATCH] kata-runtime: force delete the sandbox and container
+
+reason: force delete the container and sandbox when container
+or sandbox state is not running.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-runtime
+Change-Id: Iaccf6c2f1de2712e88307259bed305cd366a90b7
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/delete.go | 12 +++---------
+ 1 file changed, 3 insertions(+), 9 deletions(-)
+
+diff --git a/cli/delete.go b/cli/delete.go
+index 09552b9..1e6dfa5 100644
+--- a/cli/delete.go
++++ b/cli/delete.go
+@@ -117,20 +117,14 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 		return err
+ 	}
+ 
+-	forceStop := false
+ 	if oci.StateToOCIState(status.State.State) == oci.StateRunning {
+ 		if !force {
+ 			return fmt.Errorf("Container still running, should be stopped")
+ 		}
+-
+-		forceStop = true
+ 	}
+ 
+-	if oci.StateToOCIState(status.State.State) == oci.StateUnhealthy {
+-		// Set forceStop and force bool flag to true to force delete everything
+-		forceStop = true
+-		force = true
+-	}
++	// no matter what delete parameter is, just set force to remove the container and sandbox
++	force = true
+ 
+ 	switch containerType {
+ 	case vc.PodSandbox:
+@@ -138,7 +132,7 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 			return err
+ 		}
+ 	case vc.PodContainer:
+-		if err := deleteContainer(ctx, sandboxID, containerID, forceStop); err != nil {
++		if err := deleteContainer(ctx, sandboxID, containerID, force); err != nil {
+ 			// If err info containers "no such file or directory, because pod_sandbox type
+ 			// container is deleted before pod_container type container, just return nil
+ 			// and let containerd delete container operations continue
+-- 
+1.8.3.1
+

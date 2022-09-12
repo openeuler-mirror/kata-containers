@@ -1,0 +1,39 @@
+From 5cba0d988eec5a200a28fdc71ad404bba5014bf3 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Mon, 14 Dec 2020 20:05:11 -0500
+Subject: [PATCH] kata-agent: fix sync clock not work problem
+
+reason: SyncClock goroutine is not started in the kata-agent,
+so add SyncClock function back into kata-agent to make sync
+clock func avaliable.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ agent.go | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/agent.go b/agent.go
+index 50afd7a..c3d6524 100644
+--- a/agent.go
++++ b/agent.go
+@@ -1199,6 +1199,15 @@ func (s *sandbox) startGRPC() {
+ 				return
+ 			}
+ 
++			// accept the sync clock stream first
++			syncClockStream, err := l.Accept()
++			if err != nil {
++				agentLog.WithError(err).Warn("Failed to accpet the sync clock stream")
++				return
++			}
++
++			go SyncClock(syncClockStream)
++
+ 			// l is closed when Serve() returns
+ 			servErr = grpcServer.Serve(l)
+ 			if servErr != nil {
+-- 
+1.8.3.1
+

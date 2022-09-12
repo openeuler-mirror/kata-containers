@@ -1,0 +1,32 @@
+From e36bd3400309ae13e4fd20db055b332c671ff530 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Fri, 16 Apr 2021 06:57:53 -0400
+Subject: [PATCH] qemu: add arm64 to support list of dimm
+
+reason: dimm is supported on arm64, so add is to check list.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Change-Id: I26774ce6a39a9048f2c63dcb79855b17b36da999
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ vendor/github.com/intel/govmm/qemu/qemu.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/intel/govmm/qemu/qemu.go b/vendor/github.com/intel/govmm/qemu/qemu.go
+index 174d377..1e80a62 100644
+--- a/vendor/github.com/intel/govmm/qemu/qemu.go
++++ b/vendor/github.com/intel/govmm/qemu/qemu.go
+@@ -127,7 +127,7 @@ const (
+ 
+ func isDimmSupported(config *Config) bool {
+ 	switch runtime.GOARCH {
+-	case "amd64", "386":
++	case "amd64", "386", "arm64":
+ 		return true
+ 	default:
+ 		return false
+-- 
+1.8.3.1
+

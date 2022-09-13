@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION v1.11.1
-%define RELEASE 9
+%define RELEASE 10
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -91,6 +91,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 
 
 %changelog
+* Mon Sep 12 2022 Vanient<xiadanni1@huawei.com> - v1.11.1-10
+- Type:bugfix
+- CVE:NA
+- SUG:NA
+- DESC:sync bugfix patches, runtime 0078-0096 agent 0021-0024
+
 * Thu Apr 8 2021 jiangpengfei <jiangpengfei9@huawei.com> - 1.11.1-9
 - Type:bugfix
 - ID:NA

@@ -1,0 +1,91 @@
+From e0fdf20e84cf8c31eab33c562cefd943a6656215 Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu20092010@163.com>
+Date: Mon, 21 Feb 2022 09:58:04 +0800
+Subject: [PATCH] kata-runtime: check file size before creating container and
+ doing network operation
+
+reason: check file size before creating container and doing network operation
+
+Signed-off-by: holyfei <yangfeiyu20092010@163.com>
+---
+ cli/network.go                | 9 +++++++++
+ pkg/katautils/config.go       | 9 +++++++++
+ virtcontainers/utils/utils.go | 3 +++
+ 3 files changed, 21 insertions(+)
+
+diff --git a/cli/network.go b/cli/network.go
+index 7dce052..9d3a6dc 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -8,11 +8,13 @@ package main
+ import (
+ 	"context"
+ 	"encoding/json"
++	"errors"
+ 	"fmt"
+ 	"os"
+ 
+ 	vcTypes "github.com/kata-containers/runtime/virtcontainers/pkg/types"
+ 	"github.com/kata-containers/runtime/virtcontainers/types"
++	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	"github.com/sirupsen/logrus"
+ 	"github.com/urfave/cli"
+ )
+@@ -261,6 +263,13 @@ func networkModifyCommand(ctx context.Context, containerID, input string, opType
+ 	if input == "-" {
+ 		f = os.Stdin
+ 	} else {
++		st, err := os.Lstat(input)
++		if err != nil {
++			return err
++		}
++		if st.Size() > utils.MaxFileSize {
++			return errors.New("network file too big")
++		}
+ 		f, err = os.Open(input)
+ 		if err != nil {
+ 			return err
+diff --git a/pkg/katautils/config.go b/pkg/katautils/config.go
+index fd7f5eb..b0d8f71 100644
+--- a/pkg/katautils/config.go
++++ b/pkg/katautils/config.go
+@@ -10,6 +10,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io/ioutil"
++	"os"
+ 	"path/filepath"
+ 	"strings"
+ 
+@@ -1291,6 +1292,14 @@ func decodeConfig(configPath string) (tomlConfig, string, error) {
+ 		return tomlConf, "", fmt.Errorf("Cannot find usable config file (%v)", err)
+ 	}
+ 
++	st, err := os.Lstat(resolved)
++	if err != nil {
++		return tomlConf, resolved, err
++	}
++	if st.Size() > utils.MaxFileSize {
++		return tomlConf, resolved, errors.New("config file too big")
++	}
++
+ 	configData, err := ioutil.ReadFile(resolved)
+ 	if err != nil {
+ 		return tomlConf, resolved, err
+diff --git a/virtcontainers/utils/utils.go b/virtcontainers/utils/utils.go
+index d4dad40..04b6bce 100644
+--- a/virtcontainers/utils/utils.go
++++ b/virtcontainers/utils/utils.go
+@@ -41,6 +41,9 @@ const (
+ 	// Max support memory size in the Kata VM
+ 	MaxMemorySizeInMB   = 512 * 1024
+ 	MaxMemorySizeInByte = MaxMemorySizeInMB << MibToBytesShift
++
++	// Max file size for config and network json file
++	MaxFileSize = 1 * 1024 * 1024
+ )
+ 
+ // MaxSocketPathLen is the effective maximum Unix domain socket length.
+-- 
+2.27.0
+

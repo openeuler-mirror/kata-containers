@@ -1,0 +1,32 @@
+From 4aac7e5067ba0d8ace8ea592c34ad615851d67b3 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Tue, 23 Feb 2021 21:39:05 +0800
+Subject: [PATCH] kata-agent: delete container id from sandbox struct
+
+reason: delete container id from sandbox struct, when remove
+the container, the id should be also deleted
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Change-Id: Id925fdc822d93d8ac13be8b9bb8343cac2e0a514
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ grpc.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/grpc.go b/grpc.go
+index f2cfcc1..2f606b5 100644
+--- a/grpc.go
++++ b/grpc.go
+@@ -1274,6 +1274,7 @@ func (a *agentGRPC) RemoveContainer(ctx context.Context, req *pb.RemoveContainer
+ 
+ 	if timeout == 0 {
+ 		if err := ctr.removeContainer(); err != nil {
++			delete(a.sandbox.containers, ctr.id)
+ 			return emptyResp, err
+ 		}
+ 
+-- 
+2.23.0
+

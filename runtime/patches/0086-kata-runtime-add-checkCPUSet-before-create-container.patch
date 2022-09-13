@@ -1,0 +1,68 @@
+From 2a8e2726902ec344bc8c23d8bd7eb2336d236890 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Thu, 17 Dec 2020 17:54:45 -0500
+Subject: [PATCH] kata-runtime: add checkCPUSet before create container
+
+reason: add checkCPUSet before create container to make sure
+guest has the avaliable vcpus.
+
+Change-Id: Idc34f7c18c6d3ffca2d1d015f298348679464bd2
+Conflict:NA
+Reference:https://gitee.com/src-openeuler/kata-runtime
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/container.go | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 601860c..724b58c 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -13,6 +13,8 @@ import (
+ 	"io"
+ 	"os"
+ 	"path/filepath"
++	"strconv"
++	"strings"
+ 	"syscall"
+ 	"time"
+ 
+@@ -941,6 +943,13 @@ func (c *Container) checkBlockDeviceSupport() bool {
+ // createContainer creates and start a container inside a Sandbox. It has to be
+ // called only when a new container, not known by the sandbox, has to be created.
+ func (c *Container) create() (err error) {
++	if c.config.Resources.CPU != nil {
++		hypervisorCPUs := c.sandbox.config.HypervisorConfig.NumVCPUs
++		if err := checkCPUSet(int(hypervisorCPUs), c.config.Resources.CPU.Cpus); err != nil {
++			return err
++		}
++	}
++
+ 	// In case the container creation fails, the following takes care
+ 	// of rolling back all the actions previously performed.
+ 	defer func() {
+@@ -1723,3 +1732,21 @@ func (c *Container) forceKillContainer() {
+ 		c.Logger().WithError(err).Warn("force kill container: remove container drive failed")
+ 	}
+ }
++
++// checkCPUSet returns nil if the value of cpuset-cpus is smaller than sandbox_cpu
++func checkCPUSet(sandboxCPU int, cpus string) error {
++	cpuMax := 0
++	c := strings.Split(strings.Replace(cpus, "-", ",", -1), ",")
++	for _, cpu := range c {
++		if tmp, _ := strconv.Atoi(cpu); tmp > cpuMax {
++			cpuMax = tmp
++		}
++	}
++
++	if cpuMax >= sandboxCPU {
++		err := fmt.Errorf("the value of cpuset %d should be smaller than sandbox cpu number %d", cpuMax, sandboxCPU)
++		return err
++	}
++
++	return nil
++}
+-- 
+1.8.3.1
+

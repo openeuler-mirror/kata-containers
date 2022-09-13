@@ -1,0 +1,54 @@
+From 3f47ddd1b793b6fe92cba13737cd7b0c14a19edc Mon Sep 17 00:00:00 2001
+From: holyfei <yangfeiyu2@huawei.com>
+Date: Sun, 15 Nov 2020 21:48:14 +0800
+Subject: [PATCH 2/3] kata-runtime: fix qemu SCSIBus info not saved into
+ persist.json
+
+reason: SCSIBus has a map object to save the slots info which
+indicates which slot is useful. However, the SCSIBus object is
+not saved into persist.json file, which causes fetchSandbox will
+create a new one instead of restoring it from persist.json file.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+Signed-off-by: holyfei <yangfeiyu2@huawei.com>
+---
+ virtcontainers/persist/api/hypervisor.go | 1 +
+ virtcontainers/qemu.go                   | 2 ++
+ 2 files changed, 3 insertions(+)
+
+diff --git a/virtcontainers/persist/api/hypervisor.go b/virtcontainers/persist/api/hypervisor.go
+index fd61b3c2..213453ac 100644
+--- a/virtcontainers/persist/api/hypervisor.go
++++ b/virtcontainers/persist/api/hypervisor.go
+@@ -39,6 +39,7 @@ type HypervisorState struct {
+ 	// Refs: virtcontainers/qemu.go:QemuState
+ 	Bridges           []Bridge
+ 	PCIeRootPortsPool *types.PCIeRootPortPool
++	ScsiBus           *types.SCSIBus
+ 	// HotpluggedCPUs is the list of CPUs that were hot-added
+ 	HotpluggedVCPUs      []CPUDevice
+ 	HotpluggedMemory     int
+diff --git a/virtcontainers/qemu.go b/virtcontainers/qemu.go
+index be6e33b9..e5610e89 100644
+--- a/virtcontainers/qemu.go
++++ b/virtcontainers/qemu.go
+@@ -2342,6 +2342,7 @@ func (q *qemu) save() (s persistapi.HypervisorState) {
+ 	s.HotplugVFIOOnRootBus = q.state.HotplugVFIOOnRootBus
+ 	s.PCIeRootPort = q.state.PCIeRootPort
+ 	s.PCIeRootPortsPool = q.state.PCIeRootPortsPool
++	s.ScsiBus = q.state.ScsiBus
+ 
+ 	for _, bridge := range q.arch.getBridges() {
+ 		s.Bridges = append(s.Bridges, persistapi.Bridge{
+@@ -2367,6 +2368,7 @@ func (q *qemu) load(s persistapi.HypervisorState) {
+ 	q.state.VirtiofsdPid = s.VirtiofsdPid
+ 	q.state.PCIeRootPort = s.PCIeRootPort
+ 	q.state.PCIeRootPortsPool = s.PCIeRootPortsPool
++	q.state.ScsiBus = s.ScsiBus
+ 
+ 	for _, bridge := range s.Bridges {
+ 		q.state.Bridges = append(q.state.Bridges, types.NewBridge(types.Type(bridge.Type), bridge.ID, bridge.DeviceAddr, bridge.Addr))
+-- 
+2.23.0
+

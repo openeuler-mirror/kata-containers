@@ -1,0 +1,31 @@
+From 5fbf47c81a089e90d30927df231bec04f6e83348 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Tue, 2 Feb 2021 15:39:55 +0800
+Subject: [PATCH] kata: add support for update-iface
+
+reason: add support for update-iface
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Change-Id: I245ad02dafb96eed4b1525a2e6a49b8621a960c0
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ cli/network.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/cli/network.go b/cli/network.go
+index 878a01c..dbd5389 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -42,6 +42,7 @@ var kataNetworkCLICommand = cli.Command{
+ 		addIfaceCommand,
+ 		delIfaceCommand,
+ 		listIfacesCommand,
++		updateIfaceCommand,
+ 		updateRoutesCommand,
+ 		listRoutesCommand,
+ 		addRoutesCommand,
+-- 
+2.23.0
+

@@ -1,0 +1,95 @@
+From eae6c9cf1d875b28cde530ac337578bc5e301762 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 14 Jul 2021 18:16:22 -0400
+Subject: [PATCH] kata-runtime: fix qemu process resource residuals
+reason: fix qemu process resource residuals
+Change-Id: Ic16c949fde62a6f662e00d0608c2285bfaf737d0
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/delete.go               |  4 ++++
+ pkg/katautils/oci.go        | 25 +++++++++++++++++++++++++
+ virtcontainers/container.go | 14 +++++++-------
+ 3 files changed, 36 insertions(+), 7 deletions(-)
+diff --git a/cli/delete.go b/cli/delete.go
+index 1e6dfa5..cd7eb77 100644
+--- a/cli/delete.go
++++ b/cli/delete.go
+@@ -131,6 +131,10 @@ func delete(ctx context.Context, containerID string, force bool) error {
+ 		if err := deleteSandbox(ctx, sandboxID, force); err != nil {
+ 			return err
+ 		}
++
++		if err := katautils.DelSandboxIDMapping(ctx, sandboxID); err != nil {
++			kataLog.Errorf("delete all sandbox related container mapping failed: %v", err)
++		}
+ 	case vc.PodContainer:
+ 		if err := deleteContainer(ctx, sandboxID, containerID, force); err != nil {
+ 			// If err info containers "no such file or directory, because pod_sandbox type
+diff --git a/pkg/katautils/oci.go b/pkg/katautils/oci.go
+index 1334af3..053c284 100644
+--- a/pkg/katautils/oci.go
++++ b/pkg/katautils/oci.go
+@@ -113,3 +113,28 @@ func DelContainerIDMapping(ctx context.Context, containerID string) error {
+ 
+ 	return os.RemoveAll(path)
+ }
++
++func DelSandboxIDMapping(ctx context.Context, sandboxID string) error {
++	if sandboxID == "" {
++		return fmt.Errorf("Missing Sandbox ID")
++	}
++
++	files, err := ioutil.ReadDir(ctrsMapTreePath)
++	if err != nil {
++		return err
++	}
++	for _, f := range files {
++		parentID, err := FetchContainerIDMapping(f.Name())
++		if err != nil {
++			return err
++		}
++
++		if parentID == sandboxID {
++			err = DelContainerIDMapping(ctx, f.Name())
++			if err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
+diff --git a/virtcontainers/container.go b/virtcontainers/container.go
+index 724b58c..fa7d0ea 100644
+--- a/virtcontainers/container.go
++++ b/virtcontainers/container.go
+@@ -1126,13 +1126,6 @@ func (c *Container) stop(force bool) error {
+ 		return nil
+ 	}
+ 
+-	// If container state is unhealthy, just force kill the container
+-	if c.state.State == types.StateUnhealthy {
+-		c.forceKillContainer()
+-		// after force kill container, then change container state to stopped
+-		return c.setContainerState(types.StateStopped)
+-	}
+-
+ 	if err := c.state.ValidTransition(c.state.State, types.StateStopped); err != nil {
+ 		return err
+ 	}
+@@ -1155,6 +1148,13 @@ func (c *Container) stop(force bool) error {
+ 
+ 	}()
+ 
++	// If container state is unhealthy, just force kill the container
++	if c.state.State == types.StateUnhealthy {
++		c.forceKillContainer()
++		// after force kill container, then change container state to stopped
++		return c.setContainerState(types.StateStopped)
++	}
++
+ 	// Here we expect that stop() has been called because the container
+ 	// process returned or because it received a signal. In case of a
+ 	// signal, we want to give it some time to end the container process.
+-- 
+1.8.3.1
+

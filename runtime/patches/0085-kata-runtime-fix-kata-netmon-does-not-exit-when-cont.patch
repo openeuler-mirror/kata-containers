@@ -1,0 +1,70 @@
+From a1f1c9de04dd3cd2003f06c26b415c4e30fa3a53 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Wed, 16 Dec 2020 10:36:39 +0800
+Subject: [PATCH] kata-runtime: fix kata-netmon does not exit when container is
+ stopped
+
+reason: start a container and stop it, the netmon process will not exit,
+we should store the netmon info to disk and read it when fetching the sandbox,
+then the remove netmon operation will be executed.
+
+Change-Id: I2d8fd02747eaf208445444bc0c43a7d221ba1715
+Conflict:NA
+Reference:https://gitee.com/holyfei/kata-runtime
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/persist.go            | 11 ++++++++++-
+ virtcontainers/persist/api/config.go |  7 +++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/virtcontainers/persist.go b/virtcontainers/persist.go
+index efa4506..57b5336 100644
+--- a/virtcontainers/persist.go
++++ b/virtcontainers/persist.go
+@@ -192,8 +192,12 @@ func (s *Sandbox) dumpConfig(ss *persistapi.SandboxState) {
+ 			DisableNewNetNs:    sconfig.NetworkConfig.DisableNewNetNs,
+ 			EnableCompatOldCNI: sconfig.NetworkConfig.EnableCompatOldCNI,
+ 			InterworkingModel:  int(sconfig.NetworkConfig.InterworkingModel),
++			NetmonConfig: persistapi.NetmonConfig{
++				Path:   sconfig.NetworkConfig.NetmonConfig.Path,
++				Debug:  sconfig.NetworkConfig.NetmonConfig.Debug,
++				Enable: sconfig.NetworkConfig.NetmonConfig.Enable,
++			},
+ 		},
+-
+ 		ShmSize:                   sconfig.ShmSize,
+ 		SharePidNs:                sconfig.SharePidNs,
+ 		Stateful:                  sconfig.Stateful,
+@@ -484,6 +488,11 @@ func loadSandboxConfig(id string) (*SandboxConfig, error) {
+ 			DisableNewNetNs:    savedConf.NetworkConfig.DisableNewNetNs,
+ 			EnableCompatOldCNI: savedConf.NetworkConfig.EnableCompatOldCNI,
+ 			InterworkingModel:  NetInterworkingModel(savedConf.NetworkConfig.InterworkingModel),
++			NetmonConfig: NetmonConfig{
++				Path:   savedConf.NetworkConfig.NetmonConfig.Path,
++				Debug:  savedConf.NetworkConfig.NetmonConfig.Debug,
++				Enable: savedConf.NetworkConfig.NetmonConfig.Enable,
++			},
+ 		},
+ 
+ 		ShmSize:                   savedConf.ShmSize,
+diff --git a/virtcontainers/persist/api/config.go b/virtcontainers/persist/api/config.go
+index 28204fc..26f6cf4 100644
+--- a/virtcontainers/persist/api/config.go
++++ b/virtcontainers/persist/api/config.go
+@@ -215,6 +215,13 @@ type NetworkConfig struct {
+ 	DisableNewNetNs    bool
+ 	EnableCompatOldCNI bool
+ 	InterworkingModel  int
++	NetmonConfig       NetmonConfig
++}
++
++type NetmonConfig struct {
++	Path   string
++	Debug  bool
++	Enable bool
+ }
+ 
+ type ContainerConfig struct {
+-- 
+2.23.0
+

@@ -1,0 +1,33 @@
+From 22e00bc2d63212924c51261d2228699abd269657 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 2 Jun 2021 15:23:20 -0400
+Subject: [PATCH] kata-agent: fix agent.debug_console not work when built with
+ golang 1.15
+
+reason: fix agent.debug_console not work when built with golang 1.15
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ agent.go | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/agent.go b/agent.go
+index c3d6524..34d67c8 100644
+--- a/agent.go
++++ b/agent.go
+@@ -1459,9 +1459,6 @@ func setupDebugConsole(ctx context.Context, debugConsolePath string) error {
+ 	cmd.SysProcAttr = &syscall.SysProcAttr{
+ 		// Create Session
+ 		Setsid: true,
+-		// Set Controlling terminal to Ctty
+-		Setctty: true,
+-		Ctty:    int(f.Fd()),
+ 	}
+ 
+ 	go func() {
+-- 
+1.8.3.1
+

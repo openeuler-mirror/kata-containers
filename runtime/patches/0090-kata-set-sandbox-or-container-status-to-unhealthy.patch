@@ -1,0 +1,115 @@
+From 7ec457ebbbeeeaa7f130b45a2533c8459cba2913 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Fri, 5 Feb 2021 16:41:36 +0800
+Subject: [PATCH] kata: set sandbox or container status to unhealthy
+
+reason: set sandbox or container status to unhealthy when
+the cmdline is kill or delete, the unhealthy flag is used
+to totally clean the resources of stopped container
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/api.go | 69 +++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 57 insertions(+), 12 deletions(-)
+
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index dea0f5b..0223e0c 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -24,6 +24,7 @@ import (
+ 	"github.com/kata-containers/runtime/virtcontainers/utils"
+ 	specs "github.com/opencontainers/runtime-spec/specs-go"
+ 	opentracing "github.com/opentracing/opentracing-go"
++	"github.com/prometheus/procfs"
+ 	"github.com/sirupsen/logrus"
+ )
+ 
+@@ -639,19 +640,22 @@ func statusContainer(sandbox *Sandbox, containerID string) (ContainerStatus, err
+ 
+ 			// If sandbox is unhealthy, process it correctly
+ 			if !sandbox.health() {
+-				// process podSandbox container type case
+-				if isPodSandbox {
+-					if err := processUnhealthySandbox(sandbox, container); err != nil {
+-						return ContainerStatus{}, err
++				printHypervisorStatus(sandbox)
++				if isCurrentCmdKillOrDelete() {
++					// process podSandbox container type case
++					if isPodSandbox {
++						if err := processUnhealthySandbox(sandbox, container); err != nil {
++							return ContainerStatus{}, err
++						}
++					} else {
++						// If container type is pod_container, which means container operations can not be
++						// processed successfully, we should return the error as soon as possible
++						if err := container.setContainerState(types.StateUnhealthy); err != nil {
++							return ContainerStatus{}, err
++						}
++
++						return ContainerStatus{}, fmt.Errorf("container status is unhealthy, stop container failed")
+ 					}
+-				} else {
+-					// If container type is pod_container, which means container operations can not be
+-					// processed successfully, we should return the error as soon as possible
+-					if err := container.setContainerState(types.StateUnhealthy); err != nil {
+-						return ContainerStatus{}, err
+-					}
+-
+-					return ContainerStatus{}, fmt.Errorf("container status is unhealthy, stop container failed")
+ 				}
+ 			}
+ 		}
+@@ -670,6 +674,47 @@ func statusContainer(sandbox *Sandbox, containerID string) (ContainerStatus, err
+ 	// No matching containers in the sandbox
+ 	return ContainerStatus{}, nil
+ }
++func printHypervisorStatus(s *Sandbox) {
++	pids := s.hypervisor.getPids()
++
++	for _, pid := range pids {
++		if pid <= 0 {
++			virtLog.Logger.Errorf("Sandbox %v with invalid hypervisor PID: %+v", s.id, pids)
++			continue
++		}
++
++		proc, err := procfs.NewProc(pid)
++		if err != nil {
++			virtLog.Logger.Warnf("New proc of pid %v failed", pid)
++		}
++
++		stat, err := proc.NewStat()
++		virtLog.Logger.Debugf("The status of pid %v is %#v, and err is %v", pid, stat, err)
++	}
++}
++
++func isCurrentCmdKillOrDelete() bool {
++	pid := os.Getpid()
++	proc, err := procfs.NewProc(pid)
++	if err != nil {
++		virtLog.Logger.Warnf("New proc of currrent process %v failed", pid)
++		return false
++	}
++
++	lines, err := proc.CmdLine()
++	if err != nil {
++		virtLog.Logger.Errorf("Get cmd line of currrent process %v failed", pid)
++	}
++
++	for _, v := range lines {
++		if v == "kill" || v == "delete" {
++			virtLog.Logger.Debugf("The cmdline is kill or delete %v", lines)
++			return true
++		}
++	}
++
++	return false
++}
+ 
+ // KillContainer is the virtcontainers entry point to send a signal
+ // to a container running inside a sandbox. If all is true, all processes in
+-- 
+2.23.0
+

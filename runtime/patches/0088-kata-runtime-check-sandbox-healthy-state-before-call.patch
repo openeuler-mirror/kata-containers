@@ -1,0 +1,219 @@
+From fda8655987010f1c569b71f3cb269a2ba5b999f0 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Sun, 20 Dec 2020 18:45:30 -0500
+Subject: [PATCH] kata-runtime: check sandbox healthy state before call
+ kata-network
+
+reason: add more strict check operation before calling kata-network
+subcommand, because when qemu/kata-proxy in D/T abnormal state,which
+may lead to inconsistent result.
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-runtime
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ cli/network.go                   | 48 ++++++++++++++++++++++++++++++++++------
+ cli/oci.go                       | 33 +++++++++++++++++++++++++++
+ virtcontainers/api.go            | 25 +++++++++++++++++++++
+ virtcontainers/implementation.go |  4 ++++
+ virtcontainers/interfaces.go     |  1 +
+ 5 files changed, 104 insertions(+), 7 deletions(-)
+
+diff --git a/cli/network.go b/cli/network.go
+index 7dce052..824c85d 100644
+--- a/cli/network.go
++++ b/cli/network.go
+@@ -234,8 +234,28 @@ var listRoutesCommand = cli.Command{
+ }
+ 
+ func networkModifyCommand(ctx context.Context, containerID, input string, opType networkType, op vcTypes.NetworkOp) (err error) {
++	var (
++		f      *os.File
++		output = defaultOutputFile
++	)
++
++	sandboxHealthy, err := checkSandboxHealthy(ctx, containerID)
++	if err != nil {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(output).Encode(nil)
++		return err
++	}
++
++	if !sandboxHealthy {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(output).Encode(nil)
++		return fmt.Errorf("sandbox is not healthy, please check the sandbox status")
++	}
++
+ 	status, sandboxID, err := getExistingContainerInfo(ctx, containerID)
+ 	if err != nil {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(output).Encode(nil)
+ 		return err
+ 	}
+ 
+@@ -250,14 +270,11 @@ func networkModifyCommand(ctx context.Context, containerID, input string, opType
+ 
+ 	// container MUST be running
+ 	if status.State.State != types.StateRunning {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(output).Encode(nil)
+ 		return fmt.Errorf("container %s is not running", containerID)
+ 	}
+ 
+-	var (
+-		f      *os.File
+-		output = defaultOutputFile
+-	)
+-
+ 	if input == "-" {
+ 		f = os.Stdin
+ 	} else {
+@@ -329,8 +346,25 @@ func networkModifyCommand(ctx context.Context, containerID, input string, opType
+ }
+ 
+ func networkListCommand(ctx context.Context, containerID string, opType networkType) (err error) {
++	var file = defaultOutputFile
++
++	sandboxHealthy, err := checkSandboxHealthy(ctx, containerID)
++	if err != nil {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(file).Encode(nil)
++		return err
++	}
++
++	if !sandboxHealthy {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(file).Encode(nil)
++		return fmt.Errorf("sandbox is not healthy, please check the sandbox status")
++	}
++
+ 	status, sandboxID, err := getExistingContainerInfo(ctx, containerID)
+ 	if err != nil {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(file).Encode(nil)
+ 		return err
+ 	}
+ 
+@@ -345,11 +379,11 @@ func networkListCommand(ctx context.Context, containerID string, opType networkT
+ 
+ 	// container MUST be running
+ 	if status.State.State != types.StateRunning {
++		// return the null to stdout to indicate networkModifyCommand execute fail
++		json.NewEncoder(file).Encode(nil)
+ 		return fmt.Errorf("container %s is not running", containerID)
+ 	}
+ 
+-	var file = defaultOutputFile
+-
+ 	switch opType {
+ 	case interfaceType:
+ 		var interfaces []*vcTypes.Interface
+diff --git a/cli/oci.go b/cli/oci.go
+index bf962d0..1795720 100644
+--- a/cli/oci.go
++++ b/cli/oci.go
+@@ -68,6 +68,39 @@ func getContainerInfo(ctx context.Context, containerID string) (vc.ContainerStat
+ 	return ctrStatus, sandboxID, nil
+ }
+ 
++func checkSandboxHealthy(ctx context.Context, containerID string) (bool, error) {
++	// container ID MUST be provided.
++	if containerID == "" {
++		return false, fmt.Errorf("Missing container ID")
++	}
++
++	if len(containerID) < maxIDLength {
++		fullContainerID, err := getContainerIDbyPrefix(containerID)
++		if err != nil {
++			return false, err
++		}
++		containerID = fullContainerID
++	}
++
++	sandboxID, err := katautils.FetchContainerIDMapping(containerID)
++	if err != nil {
++		return false, err
++	}
++	if sandboxID == "" {
++		// Not finding a container should not trigger an error as
++		// getContainerInfo is used for checking the existence and
++		// the absence of a container ID.
++		return false, nil
++	}
++
++	healthy, err := vci.CheckSandboxHealth(ctx, sandboxID)
++	if err != nil {
++		return false, err
++	}
++
++	return healthy, nil
++}
++
+ func getExistingContainerInfo(ctx context.Context, containerID string) (vc.ContainerStatus, string, error) {
+ 	cStatus, sandboxID, err := getContainerInfo(ctx, containerID)
+ 	if err != nil {
+diff --git a/virtcontainers/api.go b/virtcontainers/api.go
+index 0a6ba59..fd4db92 100644
+--- a/virtcontainers/api.go
++++ b/virtcontainers/api.go
+@@ -1114,6 +1114,31 @@ func CleanupContainer(ctx context.Context, sandboxID, containerID string, force
+ 	return nil
+ }
+ 
++// CheckSandboxHealth is used to check sandbox healthy state to avoid qemu/kata-proxy.\
++// process is D/T state which make grpc request is blocked.
++func CheckSandboxHealth(ctx context.Context, sandboxID string) (bool, error) {
++	span, ctx := trace(ctx, "CheckSandboxHealth")
++	defer span.Finish()
++
++	if sandboxID == "" {
++		return false, vcTypes.ErrNeedSandboxID
++	}
++
++	unlock, err := rwLockSandbox(sandboxID)
++	if err != nil {
++		return false, err
++	}
++	defer unlock()
++
++	s, err := fetchSandbox(ctx, sandboxID)
++	if err != nil {
++		return false, err
++	}
++	defer s.releaseStatelessSandbox()
++
++	return s.health(), nil
++}
++
+ // procesUnhealthySandbox only change sandbox state to unhealthy
+ // when caller is kata-runtime kill or kata-runtime delete
+ func processUnhealthySandbox(sandbox *Sandbox, container *Container) error {
+diff --git a/virtcontainers/implementation.go b/virtcontainers/implementation.go
+index fedc51f..30f6807 100644
+--- a/virtcontainers/implementation.go
++++ b/virtcontainers/implementation.go
+@@ -208,3 +208,7 @@ func (impl *VCImpl) AddPidToSandboxCgroup(ctx context.Context, pid int, sandboxC
+ func (impl *VCImpl) GetSandboxCgroupPath(ctx context.Context, sandboxID string) (string, error) {
+ 	return GetSandboxCgroupPath(ctx, sandboxID)
+ }
++
++func (impl *VCImpl) CheckSandboxHealth(ctx context.Context, sandboxID string) (bool, error) {
++	return CheckSandboxHealth(ctx, sandboxID)
++}
+\ No newline at end of file
+diff --git a/virtcontainers/interfaces.go b/virtcontainers/interfaces.go
+index 4d166e0..3acd435 100644
+--- a/virtcontainers/interfaces.go
++++ b/virtcontainers/interfaces.go
+@@ -63,6 +63,7 @@ type VC interface {
+ 	UpdateIPVSRule(ctx context.Context, sandboxID string, IPVSRule *grpc.UpdateIPVSRequest) (*grpc.IPVSResponse, error)
+ 
+ 	CleanupContainer(ctx context.Context, sandboxID, containerID string, force bool) error
++	CheckSandboxHealth(ctx context.Context, sandboxID string) (bool, error)
+ }
+ 
+ // VCSandbox is the Sandbox interface
+-- 
+1.8.3.1
+

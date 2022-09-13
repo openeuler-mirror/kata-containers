@@ -1,0 +1,40 @@
+From 699a5993aebc93e41a71658b32061b918e2a7a39 Mon Sep 17 00:00:00 2001
+From: yangfeiyu <yangfeiyu2@huawei.com>
+Date: Fri, 16 Apr 2021 17:10:48 +0800
+Subject: [PATCH] kata-runtime: add timeout for grpcWaitProcessRequest
+
+reason: add timeout for grpcWaitProcessRequest, it is only used
+in stopping container process
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+
+Signed-off-by: yangfeiyu <yangfeiyu2@huawei.com>
+---
+ virtcontainers/kata_agent.go | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index f7742fe..94b4ef5 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -60,6 +60,7 @@ const (
+ )
+ 
+ var (
++	waitProcessTimeOut          = 10 * time.Second
+ 	checkRequestTimeout         = 10 * time.Second
+ 	defaultRequestTimeout       = 10 * time.Second
+ 	createContainerTimeout      = 120 * time.Second
+@@ -2183,7 +2184,7 @@ func (k *kataAgent) getReqContext(reqName string) (ctx context.Context, cancel c
+ 	ctx = context.Background()
+ 	switch reqName {
+ 	case grpcWaitProcessRequest:
+-		// Wait has no timeout
++		ctx, cancel = context.WithTimeout(ctx, waitProcessTimeOut)
+ 	case grpcCheckRequest:
+ 		ctx, cancel = context.WithTimeout(ctx, checkRequestTimeout)
+ 	case grpcCreateContainerRequest:
+-- 
+2.23.0
+

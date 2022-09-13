@@ -1,0 +1,51 @@
+From a5c0594b1874d1693c97475136a1850a9cf6ee73 Mon Sep 17 00:00:00 2001
+From: jiangpengfei <jiangpengfei9@huawei.com>
+Date: Wed, 18 Nov 2020 19:51:40 -0500
+Subject: [PATCH] kata-runtime: cut too long message in grpc log
+
+reason: cut too long message in grpc log to avoid logrus prints
+"too long message" error
+
+Conflict: NA
+Reference:https://gitee.com/src-openeuler/kata-containers
+Change-Id: I221e78ef142c80e6b3241d10ece235fcd36a6104
+Signed-off-by: jiangpengfei <jiangpengfei9@huawei.com>
+---
+ virtcontainers/kata_agent.go | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/virtcontainers/kata_agent.go b/virtcontainers/kata_agent.go
+index 66f6ef6..75985e2 100644
+--- a/virtcontainers/kata_agent.go
++++ b/virtcontainers/kata_agent.go
+@@ -91,6 +91,7 @@ var (
+ 	localDirOptions             = []string{"mode=0777"}
+ 	maxHostnameLen              = 64
+ 	GuestDNSFile                = "/etc/resolv.conf"
++	maxLogLength                = 1024
+ )
+ 
+ const (
+@@ -2200,12 +2201,17 @@ func (k *kataAgent) sendReq(request interface{}) (interface{}, error) {
+ 	if msgName == "" || handler == nil {
+ 		return nil, errors.New("Invalid request type")
+ 	}
+-	message := request.(proto.Message)
++	message := request.(proto.Message).String()
++	// if message is too long, we just print top 1024 char in log
++	if len(message) > maxLogLength {
++		message = message[:maxLogLength]
++	}
++
+ 	ctx, cancel := k.getReqContext(msgName)
+ 	if cancel != nil {
+ 		defer cancel()
+ 	}
+-	k.Logger().WithField("name", msgName).WithField("req", message.String()).Debug("sending request")
++	k.Logger().WithField("name", msgName).WithField("req", message).Debug("sending request")
+ 
+ 	return handler(ctx, request)
+ }
+-- 
+1.8.3.1
+

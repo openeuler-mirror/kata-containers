@@ -1,0 +1,49 @@
+From f6ae15826e2a334c9a6a7f003609c6a4244a28b2 Mon Sep 17 00:00:00 2001
+From: Eric Ernst <eric_ernst@apple.com>
+Date: Thu, 2 Dec 2021 16:22:51 -0800
+Subject: [PATCH] agent: drop unused fields from network
+
+We don't utilize routes or inteface vectors. Let's drop them.
+
+Signed-off-by: Eric Ernst <eric_ernst@apple.com>
+---
+ src/agent/src/network.rs | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/src/agent/src/network.rs b/src/agent/src/network.rs
+index 4b72d4093..80ff00d6d 100644
+--- a/src/agent/src/network.rs
++++ b/src/agent/src/network.rs
+@@ -5,28 +5,22 @@
+ 
+ use anyhow::{anyhow, Result};
+ use nix::mount::{self, MsFlags};
+-use protocols::types::{Interface, Route};
+ use slog::Logger;
+-use std::collections::HashMap;
+ use std::fs;
+ 
+ const KATA_GUEST_SANDBOX_DNS_FILE: &str = "/run/kata-containers/sandbox/resolv.conf";
+ const GUEST_DNS_FILE: &str = "/etc/resolv.conf";
+ 
+-// Network fully describes a sandbox network with its interfaces, routes and dns
++// Network describes a sandbox network, includings its dns
+ // related information.
+ #[derive(Debug, Default)]
+ pub struct Network {
+-    ifaces: HashMap<String, Interface>,
+-    routes: Vec<Route>,
+     dns: Vec<String>,
+ }
+ 
+ impl Network {
+     pub fn new() -> Network {
+         Network {
+-            ifaces: HashMap::new(),
+-            routes: Vec::new(),
+             dns: Vec::new(),
+         }
+     }
+-- 
+2.25.1
+

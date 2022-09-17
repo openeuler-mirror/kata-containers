@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 30
+%define RELEASE 31
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -108,6 +108,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Sat Sep 17 2022 chengzeruizhi <chengzeruizhi@huawei.com> - 2.1.0-31
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:drop unused fields from agent network
+
 * Thu Sep 8 2022 xiadanni <xiadanni1@huawei.com> - 2.1.0-30
 - Type:enhancement
 - ID:NA

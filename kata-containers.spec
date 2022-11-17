@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 24
+%define RELEASE 25
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Thu Nov 17 2022 Vanient<xiadanni1@huawei.com> - 1.11.1-25
+- Type:bugfix
+- CVE:NA
+- SUG:NA
+- DESC:add timeout for all qmp commands
+
 * Mon Sep 12 2022 Vanient<xiadanni1@huawei.com> - 1.11.1-24
 - Type:bugfix
 - CVE:NA

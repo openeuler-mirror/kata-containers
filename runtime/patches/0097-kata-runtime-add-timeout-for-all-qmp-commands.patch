@@ -1,0 +1,48 @@
+From d28dd8fd6f57a0d42b41f7d12adc248a9911093e Mon Sep 17 00:00:00 2001
+From: Vanient <xiadanni1@huawei.com>
+Date: Wed, 2 Nov 2022 16:32:12 +0800
+Subject: [PATCH] [Huawei]kata-runtime:add timeout for all qmp commands
+
+If qemu process is blocked for some reasons, qmp command call
+will block without return, which causes kata command blocked.
+So we add timeout for all qmp commands.
+
+Signed-off-by: Vanient <xiadanni1@huawei.com>
+---
+ vendor/github.com/intel/govmm/qemu/qmp.go | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/vendor/github.com/intel/govmm/qemu/qmp.go b/vendor/github.com/intel/govmm/qemu/qmp.go
+index 1d6d9c6..97aff4a 100644
+--- a/vendor/github.com/intel/govmm/qemu/qmp.go
++++ b/vendor/github.com/intel/govmm/qemu/qmp.go
+@@ -33,6 +33,8 @@ import (
+ 	"strings"
+ )
+ 
++const qmpCommandTimeout = 30 * time.Second
++
+ // QMPLog is a logging interface used by the qemu package to log various
+ // interesting pieces of information.  Rather than introduce a dependency
+ // on a given logging package, qemu presents this interface that allows
+@@ -625,8 +627,17 @@ func startQMPLoop(conn io.ReadWriteCloser, cfg QMPConfig,
+ 	return q
+ }
+ 
++func FixMissingTimeout(ctx context.Context) (context.Context, func()) {
++	if _, ok := ctx.Deadline(); ok {
++		return ctx, func() {}
++	}
++	return context.WithTimeout(ctx, qmpCommandTimeout)
++}
++
+ func (q *QMP) executeCommandWithResponse(ctx context.Context, name string, args map[string]interface{},
+ 	oob []byte, filter *qmpEventFilter) (interface{}, error) {
++	ctx, cancel := FixMissingTimeout(ctx)
++	defer cancel()
+ 	var err error
+ 	var response interface{}
+ 	resCh := make(chan qmpResult)
+-- 
+2.27.0
+

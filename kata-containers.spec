@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 31
+%define RELEASE 32
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -109,6 +109,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Mon Mar 6 2023 zhukeqian <zhukeqian1@huawei.com> - 2.1.0-32
+- Type:bugfix
+- ID:NA
+- SUG:NA
+- DESC:append readonly option when get pflash cmdline for stratovirt runtime
+
 * Thu Mar 02 2023 Vanient<xiadanni1@huawei.com> - 2.1.0-31
 - Type:bugfix
 - CVE:NA
@@ -145,7 +151,7 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 - SUG:NA
 - DESC:fix startup failure that adding more than 16 root port devices in stratovirt
 
-* Tues Mar 2 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-25
+* Wed Mar 2 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-25
 - Type:feature
 - ID:NA
 - SUG:NA
@@ -163,13 +169,13 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 - SUG:NA
 - DESC:add the stratovirt standardVM sandbox type to kata container
 
-* Thur Jan 13 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-22
+* Thu Jan 13 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-22
 - Type:feature
 - ID:NA
 - SUG:NA
 - DESC:refactor hypervisor type `stratovirt` and its methods
 
-* Tues Jan 11 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-21
+* Tue Jan 11 2022 Xinle.Guo <guoxinle1@huawei.com> - 2.1.0-21
 - Type:feature
 - ID:NA
 - SUG:NA
@@ -235,7 +241,7 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 - SUG:NA
 - DESC:fix umount container rootfs dir return invalid argument error
 
-* Fri Nov 24 2021 jikui <jikui2@huawei.com> - 2.1.0-10
+* Wed Nov 24 2021 jikui <jikui2@huawei.com> - 2.1.0-10
 - Type:bugfix
 - ID:NA
 - SUG:NA
@@ -247,19 +253,19 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 - SUG:NA
 - DESC:modify kernel and image path in configuration.toml
 
-* Tue Oct 16 2021 jikui <jikui2@huawei.com> - 2.1.0-8
+* Sat Oct 16 2021 jikui <jikui2@huawei.com> - 2.1.0-8
 - Type:bugfix
 - ID:NA
 - SUG:NA
 - DESC:keep the qemu process name same as the configured path
 
-* Mon Oct 15 2021 jikui <jikui2@huawei.com> - 2.1.0-7
+* Fri Oct 15 2021 jikui <jikui2@huawei.com> - 2.1.0-7
 - Type:bugfix
 - ID:NA
 - SUG:NA
 - DESC:fix kata-runtime skip read lines in /proc/mounts
 
-* Fri Oct 5 2021 jikui <jikui2@huawei.com> - 2.1.0-6
+* Tue Oct 5 2021 jikui <jikui2@huawei.com> - 2.1.0-6
 - Type:bugfix
 - ID:NA
 - SUG:NA

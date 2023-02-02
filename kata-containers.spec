@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 1.11.1
-%define RELEASE 25
+%define RELEASE 26
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -98,6 +98,12 @@ install -p -m 640 -D ./runtime/cli/config/configuration-qemu.toml %{buildroot}/u
 %doc
 
 %changelog
+* Thu Feb 02 2023 Vanient<xiadanni1@huawei.com> - 1.11.1-26
+- Type:bugfix
+- CVE:NA
+- SUG:NA
+- DESC:remove kernel_irqchip option for qemu 6.2
+
 * Thu Nov 17 2022 Vanient<xiadanni1@huawei.com> - 1.11.1-25
 - Type:bugfix
 - CVE:NA

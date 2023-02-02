@@ -1,0 +1,33 @@
+From eb576e014e3c3ce13898f1702817ef3e4d9709d9 Mon Sep 17 00:00:00 2001
+From: Vanient <xiadanni1@huawei.com>
+Date: Thu, 2 Feb 2023 15:47:11 +0800
+Subject: [PATCH] kata-runtime: remove kernel_irqchip option
+
+`kernel_irqchip` option doesn't seem to bring any benefits and, on the
+contrary, its usage cause issues when using the microvm machine type.
+
+With this in mind, let's remove it.
+
+upstream:https://github.com/kata-containers/kata-containers/commit/17de94e1187dd94d7e1b948c717ff0889b65fc11
+
+Signed-off-by: Vanient <xiadanni1@huawei.com>
+---
+ virtcontainers/qemu_amd64.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/virtcontainers/qemu_amd64.go b/virtcontainers/qemu_amd64.go
+index 1a5b266..7c52faf 100644
+--- a/virtcontainers/qemu_amd64.go
++++ b/virtcontainers/qemu_amd64.go
+@@ -25,7 +25,7 @@ const (
+ 
+ 	defaultQemuMachineType = QemuPC
+ 
+-	defaultQemuMachineOptions = "accel=kvm,kernel_irqchip"
++	defaultQemuMachineOptions = "accel=kvm"
+ 
+ 	qmpMigrationWaitTimeout = 5 * time.Second
+ )
+-- 
+2.27.0
+

@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 %define VERSION 2.1.0
-%define RELEASE 30
+%define RELEASE 31
 
 Name:           kata-containers
 Version:        %{VERSION}
@@ -43,6 +43,7 @@ cp %{_builddir}/kata_integration/hack/config-kata-arm64 ./.config
 
 %build
 cd %{_builddir}/kernel/linux/
+make olddefconfig
 make %{?_smp_mflags}
 
 mv %{_builddir}/kata-containers-%{version} %{_builddir}/kata-containers
@@ -108,6 +109,12 @@ strip %{buildroot}/usr/bin/containerd-shim-kata-v2
 %doc
 
 %changelog
+* Thu Mar 02 2023 Vanient<xiadanni1@huawei.com> - 2.1.0-31
+- Type:bugfix
+- CVE:NA
+- SUG:NA
+- DESC:make oldconfig to disable unuseable config
+
 * Thu Sep 8 2022 xiadanni <xiadanni1@huawei.com> - 2.1.0-30
 - Type:enhancement
 - ID:NA

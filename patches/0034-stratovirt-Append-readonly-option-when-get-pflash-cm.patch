@@ -1,0 +1,39 @@
+From 59cf9bfb95386f123190eff58d50e99ec1ec5ea7 Mon Sep 17 00:00:00 2001
+From: Keqian Zhu <zhukeqian1@huawei.com>
+Date: Tue, 20 Dec 2022 14:14:46 +0800
+Subject: [PATCH] stratovirt: Append readonly option when get pflash cmdline
+
+All Stratovirt VM shares the same pflash file by default, and file can only be
+shared readonly for safety.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ src/runtime/virtcontainers/stratovirt.go | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/runtime/virtcontainers/stratovirt.go b/src/runtime/virtcontainers/stratovirt.go
+index 98a702a..7b01c76 100644
+--- a/src/runtime/virtcontainers/stratovirt.go
++++ b/src/runtime/virtcontainers/stratovirt.go
+@@ -661,15 +661,15 @@ func (s *stratovirt) getKernelParams(machineType string, initrdPath string) (str
+ func (s *stratovirt) getPFlash(machineType string) ([]string, error) {
+ 	var PFlash []string
+ 	if s.config.FirmwarePath != "" {
+-		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", s.config.FirmwarePath))
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0,readonly=true", s.config.FirmwarePath))
+ 		return PFlash, nil
+ 	}
+ 
+ 	switch machineType {
+ 	case MachineTypeQ35:
+-		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", Q35PFlashCode))
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0,readonly=true", Q35PFlashCode))
+ 	case MachineTypeVirt:
+-		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0", VirtPFlashCode))
++		PFlash = append(PFlash, fmt.Sprintf("file=%s,if=pflash,unit=0,readonly=true", VirtPFlashCode))
+ 	case MachineTypeMicrovm:
+ 		return nil, nil
+ 	default:
+-- 
+2.33.0
+
